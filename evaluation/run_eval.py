@@ -37,11 +37,22 @@ def resolve_writable_outputs_dir(requested_path: str) -> str:
     candidate = requested_path if requested_path and requested_path.strip() else './outputs'
     candidate_abs = os.path.abspath(candidate)
 
-    try:
-        os.makedirs(candidate_abs, exist_ok=True)
+    def _is_writable_dir(path: str) -> bool:
+        try:
+            os.makedirs(path, exist_ok=True)
+            probe_dir = os.path.join(path, '.probe_writable')
+            os.makedirs(probe_dir, exist_ok=True)
+            probe_file = os.path.join(probe_dir, 'touch')
+            with open(probe_file, 'w') as f:
+                f.write('ok')
+            os.remove(probe_file)
+            os.rmdir(probe_dir)
+            return True
+        except Exception:
+            return False
+
+    if _is_writable_dir(candidate_abs):
         return candidate_abs
-    except Exception:
-        pass
 
     repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     fallbacks = [
@@ -50,15 +61,31 @@ def resolve_writable_outputs_dir(requested_path: str) -> str:
     ]
 
     for fb in fallbacks:
-        try:
-            os.makedirs(fb, exist_ok=True)
+        if _is_writable_dir(fb):
             return os.path.abspath(fb)
-        except Exception:
-            continue
 
     # Last resort: temp directory
     temp_out = tempfile.mkdtemp(prefix='outputs_')
     return temp_out
+
+
+def _probe_dir_writable(path: str) -> bool:
+    """Check directory writability by creating a subdir and a file.
+
+    Returns True if success, False otherwise.
+    """
+    try:
+        os.makedirs(path, exist_ok=True)
+        probe_sub = os.path.join(path, '.probe_sub')
+        os.makedirs(probe_sub, exist_ok=True)
+        probe_file = os.path.join(probe_sub, 'touch')
+        with open(probe_file, 'w') as f:
+            f.write('ok')
+        os.remove(probe_file)
+        os.rmdir(probe_sub)
+        return True
+    except Exception:
+        return False
 
 
 def get_config(
@@ -71,7 +98,7 @@ def get_config(
         run_as_openhands=False,
         max_budget_per_task=4,
         max_iterations=100,
-        save_trajectory_path=os.path.join(mount_path_on_host, f'traj_{task_short_name}.json'),
+        save_trajectory_path=os.path.join(mount_path_on_host, 'traj', f'traj_{task_short_name}.json'),
         sandbox=SandboxConfig(
             base_container_image=base_container_image,
             enable_auto_lint=True,
@@ -351,17 +378,50 @@ if __name__ == '__main__':
     # Use a writable outputs directory BOTH for runtime mount and final artifacts.
     safe_outputs_dir = resolve_writable_outputs_dir(args.outputs_path)
     
-    # Pre-create browser screenshots directory on host with proper permissions
+    # Pre-create browser screenshots directory on host (best-effort)
     browser_screenshots_dir = os.path.join(safe_outputs_dir, '.browser_screenshots')
-    os.makedirs(browser_screenshots_dir, exist_ok=True, mode=0o777)
-    os.chmod(browser_screenshots_dir, 0o777)  # Ensure writable
+    try:
+        os.makedirs(browser_screenshots_dir, exist_ok=True, mode=0o777)
+        try:
+            os.chmod(browser_screenshots_dir, 0o777)
+        except (OSError, PermissionError) as e:
+            logger.warning(f"Could not chmod browser screenshots dir: {e}")
+    except (OSError, PermissionError) as e:
+        logger.warning(f"Could not create browser screenshots dir: {e}")
     logger.info(f"Pre-created browser screenshots dir: {browser_screenshots_dir}")
-    
-    # Pre-create screenshots directory on host with proper permissions
+
+    # Prepare screenshots directory with fallback to temp when not writable
     screenshots_dir = os.path.join(safe_outputs_dir, 'screenshots')
-    os.makedirs(screenshots_dir, exist_ok=True, mode=0o777)
-    os.chmod(screenshots_dir, 0o777)  # Ensure writable
+    try:
+        os.makedirs(screenshots_dir, exist_ok=True, mode=0o777)
+        try:
+            os.chmod(screenshots_dir, 0o777)
+        except (OSError, PermissionError) as e:
+            logger.warning(f"Could not chmod screenshots dir: {e}")
+    except (OSError, PermissionError):
+        tmp_base = tempfile.mkdtemp(prefix='screenshots_')
+        screenshots_dir = tmp_base
+        logger.warning(f"Falling back screenshots dir to temp: {screenshots_dir}")
     logger.info(f"Pre-created screenshots dir: {screenshots_dir}")
+
+    # Verify screenshots_dir is actually writable; otherwise disable saving screenshots
+    save_screenshots_flag = True
+    if not _probe_dir_writable(screenshots_dir):
+        logger.warning(f"Screenshots dir not writable, switching to temp...")
+        tmp_base = tempfile.mkdtemp(prefix='screenshots_')
+        if _probe_dir_writable(tmp_base):
+            screenshots_dir = tmp_base
+            logger.info(f"Using temp screenshots dir: {screenshots_dir}")
+        else:
+            logger.error("Temp screenshots dir also not writable; will disable screenshot saving.")
+            save_screenshots_flag = False
+
+    # Pre-create trajectory dir under safe_outputs_dir
+    traj_dir = os.path.join(safe_outputs_dir, 'traj')
+    try:
+        os.makedirs(traj_dir, exist_ok=True, mode=0o777)
+    except Exception as e:
+        logger.warning(f"Could not pre-create traj dir: {e}")
 
     # If --build-image-only True, build the runtime image and exit.
     if args.build_image_only:
@@ -407,20 +467,20 @@ if __name__ == '__main__':
     logger.info(f"Service dependencies: {dependencies}")
 
     try:
-        pre_login(runtime, dependencies, save_screenshots=True,
-                  screenshots_dir=os.path.join(safe_outputs_dir, "screenshots"))
+        pre_login(runtime, dependencies, save_screenshots=save_screenshots_flag,
+                  screenshots_dir=os.path.join(screenshots_dir))
     except Exception as e:
         logger.error(f"Failed to pre-login: {e}")
         init_task_env(runtime, args.server_hostname, env_llm_config)
-        pre_login(runtime, dependencies, save_screenshots=True,
-                  screenshots_dir=os.path.join(safe_outputs_dir, "screenshots"))
+        pre_login(runtime, dependencies, save_screenshots=save_screenshots_flag,
+                  screenshots_dir=os.path.join(screenshots_dir))
 
     state = run_solver(runtime, task_short_name, config, dependencies,
                        save_final_state=True, state_dir=safe_outputs_dir,
-                       save_screenshots=True, screenshots_dir=os.path.join(safe_outputs_dir, "screenshots"))
+                       save_screenshots=save_screenshots_flag, screenshots_dir=os.path.join(screenshots_dir))
 
     # Container path (mounted to safe_outputs_dir on host)
-    trajectory_path = f'/outputs/traj_{task_short_name}.json'
+    trajectory_path = f'/outputs/traj/traj_{task_short_name}.json'
     result_path = f'/outputs/eval_{task_short_name}.json'
 
     run_evaluator(runtime, env_llm_config, trajectory_path, result_path)
