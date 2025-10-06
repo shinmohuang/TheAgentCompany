@@ -28,6 +28,39 @@ from openhands.utils.async_utils import call_async_from_sync
 from browsing import pre_login
 
 
+def resolve_writable_outputs_dir(requested_path: str) -> str:
+    """Return an absolute, writable outputs directory.
+
+    If the requested path is not writable (e.g., absolute path at '/'),
+    fall back to repository-root 'outputs', then CWD 'outputs', then a temp dir.
+    """
+    candidate = requested_path if requested_path and requested_path.strip() else './outputs'
+    candidate_abs = os.path.abspath(candidate)
+
+    try:
+        os.makedirs(candidate_abs, exist_ok=True)
+        return candidate_abs
+    except Exception:
+        pass
+
+    repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    fallbacks = [
+        os.path.join(repo_root, 'outputs'),
+        os.path.join(os.getcwd(), 'outputs'),
+    ]
+
+    for fb in fallbacks:
+        try:
+            os.makedirs(fb, exist_ok=True)
+            return os.path.abspath(fb)
+        except Exception:
+            continue
+
+    # Last resort: temp directory
+    temp_out = tempfile.mkdtemp(prefix='outputs_')
+    return temp_out
+
+
 def get_config(
     base_container_image: str,
     task_short_name: str,
@@ -69,9 +102,7 @@ def load_dependencies(runtime: Runtime) -> List[str]:
     Every task has a dependencies.yml file, which lists all the services that the
     task depends on. This function loads the file and returns all dependent service names.
     """
-    command = (
-        "cat /utils/dependencies.yml"
-    )
+    command = "cat /utils/dependencies.yml"
     action = CmdRunAction(command=command)
     logger.info(action, extra={'msg_type': 'ACTION'})
     obs: CmdOutputObservation = runtime.run_action(action)
@@ -83,21 +114,76 @@ def load_dependencies(runtime: Runtime) -> List[str]:
     return dependencies
 
 
+def rc_ready(runtime: Runtime, tries: int = 10, sleep_secs: float = 1.0) -> bool:
+    """Probe Rocket.Chat without resetting anything."""
+    probe_urls = [
+        "http://127.0.0.1:3002/api/info",
+        "http://localhost:3002/api/info",
+        "http://127.0.0.1:3000/api/info",
+        "http://localhost:3000/api/info",
+    ]
+    for url in probe_urls:
+        cmd = (
+            f"/bin/sh -lc 'for i in $(seq 1 {tries}); do "
+            f" code=$(curl -s -o /dev/null -w %{{http_code}} {url} || echo 000); "
+            f" [ \"$code\" = \"200\" ] && exit 0; sleep {sleep_secs}; done; exit 1'"
+        )
+        obs = runtime.run_action(CmdRunAction(command=cmd))
+        logger.info("Pre-probe RC at %s -> exit_code=%s", url, getattr(obs, "exit_code", "N/A"))
+        if getattr(obs, "exit_code", 1) == 0:
+            logger.info("RC is reachable via %s; will skip init.sh", url)
+            return True
+    return False
+
+
 def init_task_env(runtime: Runtime, hostname: str, env_llm_config: LLMConfig):
+    """
+    Probe-first:
+      1) Try probing RC first; if ready, skip init.sh.
+      2) Otherwise, run init.sh, then wait for RC to become ready.
+    """
+    def probe_rc(max_tries: int = 60, sleep_secs: float = 2.0) -> bool:
+        probe_urls = [
+            "http://127.0.0.1:3002/api/info",
+            "http://localhost:3002/api/info",
+            "http://host.docker.internal:3002/api/info",
+            "http://172.17.0.1:3002/api/info",
+        ]
+        for url in probe_urls:
+            probe_cmd = (
+                f"/bin/sh -lc 'for i in $(seq 1 {max_tries}); do "
+                f" code=$(curl -s -o /dev/null -w %{{http_code}} {url} || echo 000); "
+                f" [ \"$code\" = \"200\" ] && exit 0; sleep {sleep_secs}; done; exit 1'"
+            )
+            probe_action = CmdRunAction(command=probe_cmd)
+            probe_action.set_hard_timeout(int(max_tries * (sleep_secs + 0.5)))
+            probe_obs = runtime.run_action(probe_action)
+            logger.info("Probe RC at %s -> exit_code=%s", url, probe_obs.exit_code)
+            if probe_obs.exit_code == 0:
+                logger.info("Rocket.Chat reachable at %s; continuing.", url)
+                return True
+        return False
+
+    if probe_rc(max_tries=5, sleep_secs=1.0):
+        return
+
     command = (
         f"SERVER_HOSTNAME={hostname} "
         f"LITELLM_API_KEY={env_llm_config.api_key.get_secret_value() if env_llm_config.api_key else None} "
         f"LITELLM_BASE_URL={env_llm_config.base_url} "
         f"LITELLM_MODEL={env_llm_config.model} "
-        "echo "" | sudo tee -a /etc/hosts && "
+        "echo \"\" | sudo tee -a /etc/hosts && "
         "bash /utils/init.sh"
     )
     action = CmdRunAction(command=command)
-    action.set_hard_timeout(900)
+    action.set_hard_timeout(300)
     logger.info(action, extra={'msg_type': 'ACTION'})
     obs = runtime.run_action(action)
     logger.info(obs, extra={'msg_type': 'OBSERVATION'})
-    assert obs.exit_code == 0
+
+    if not probe_rc(max_tries=60, sleep_secs=2.0):
+        raise RuntimeError("Rocket.Chat not reachable from runtime after init.sh. "
+                           "Please ensure RC is exposed and runtime uses host networking.")
 
 
 def codeact_user_response(state: State) -> str:
@@ -108,14 +194,12 @@ def codeact_user_response(state: State) -> str:
     )
 
     if state.history:
-        # check if the agent has tried to talk to the user 3 times, if so, let the agent know it can give up
         user_msgs = [
             event
             for event in state.history
             if isinstance(event, MessageAction) and event.source == 'user'
         ]
         if len(user_msgs) >= 2:
-            # let the agent know that it can give up when it has tried 3 times
             return (
                 msg
                 + 'If you want to give up, run: <execute_bash> exit </execute_bash>.\n'
@@ -147,11 +231,20 @@ def run_solver(runtime: Runtime, task_name: str, config: OpenHandsConfig, depend
         os.makedirs(screenshots_dir, exist_ok=True)
         for image_id, obs in enumerate(state.history):
             if isinstance(obs, BrowserOutputObservation):
-                image_data = base64.b64decode(
-                    obs.screenshot.replace('data:image/png;base64,', '')
-                )
-                with open(os.path.join(screenshots_dir, f'{image_id}.png'), 'wb') as file:
-                    file.write(image_data)
+                content = getattr(obs, 'screenshot', '')
+                try:
+                    if content.startswith('data:image/'):
+                        header_end = content.find(',')
+                        content = content[header_end + 1:] if header_end != -1 else content
+                    padding = len(content) % 4
+                    if padding:
+                        content = content + ('=' * (4 - padding))
+                    image_data = base64.b64decode(content, validate=False) if content else b''
+                except Exception:
+                    image_data = b''
+                if image_data:
+                    with open(os.path.join(screenshots_dir, f'{image_id}.png'), 'wb') as file:
+                        file.write(image_data)
 
     if save_final_state:
         os.makedirs(state_dir, exist_ok=True)
@@ -166,7 +259,7 @@ def run_evaluator(runtime: Runtime, env_llm_config: LLMConfig, trajectory_path: 
         f"LITELLM_API_KEY={env_llm_config.api_key.get_secret_value() if env_llm_config.api_key else None} "
         f"LITELLM_BASE_URL={env_llm_config.base_url} "
         f"LITELLM_MODEL={env_llm_config.model} "
-        f"DECRYPTION_KEY='theagentcompany is all you need' "  # Hardcoded Key
+        f"DECRYPTION_KEY='theagentcompany is all you need' "
         f"python_default /utils/eval.py --trajectory_path {trajectory_path} --result_path {result_path}"
     )
     action = CmdRunAction(command=command)
@@ -175,6 +268,38 @@ def run_evaluator(runtime: Runtime, env_llm_config: LLMConfig, trajectory_path: 
     obs = runtime.run_action(action)
     logger.info(obs, extra={'msg_type': 'OBSERVATION'})
     assert obs.exit_code == 0
+
+
+def ensure_rc_alias_and_forward(runtime: Runtime):
+    """
+    1) Map the-agent-company.com to 127.0.0.1 inside runtime.
+    2) Verify /outputs permissions (already set on host before mount).
+    """
+    runtime.run_action(CmdRunAction(command=(
+        "sh -lc 'grep -q \"the-agent-company.com\" /etc/hosts || "
+        "echo \"127.0.0.1 the-agent-company.com\" | (command -v sudo >/dev/null 2>&1 && sudo tee -a /etc/hosts || tee -a /etc/hosts)'"
+    )))
+    
+    # Verify /outputs permissions (already set on host)
+    obs = runtime.run_action(CmdRunAction(command=(
+        "sh -lc 'ls -la /outputs/ | head -10'"
+    )))
+    logger.info(f"/outputs directory listing: {getattr(obs, 'content', '')[:300]}")
+
+
+def verify_rc_alias_and_forward(runtime: Runtime):
+    """Log alias status & a probe to help debugging."""
+    hosts_obs = runtime.run_action(CmdRunAction(command=(
+        "sh -lc 'echo \"--- getent hosts ---\"; getent hosts the-agent-company.com || true; "
+        "echo \"--- /etc/hosts lines ---\"; nl -ba /etc/hosts | grep -n \"the-agent-company.com\" || true'"
+    )))
+    logger.info("Hosts mapping for the-agent-company.com => %s", getattr(hosts_obs, 'content', '').strip())
+
+    probe_obs = runtime.run_action(CmdRunAction(command=(
+        "sh -lc 'code=$(curl -s -o /dev/null -w %{http_code} http://the-agent-company.com:3000/api/info || echo 000); "
+        "echo RC_3000_HTTP=$code'"
+    )))
+    logger.info("Probe the-agent-company.com:3000/api/info => %s", getattr(probe_obs, 'content', '').strip())
 
 
 if __name__ == '__main__':
@@ -196,7 +321,7 @@ if __name__ == '__main__':
         type=str,
         default='localhost',
         help='Server hostname, e.g. localhost to access the host machine from the container, '
-        'assuming the task docker container is run with `--network host` flag'
+             'assuming the task docker container is run with `--network host` flag'
     )
     parser.add_argument(
         '--agent-llm-config',
@@ -219,81 +344,85 @@ if __name__ == '__main__':
     args, _ = parser.parse_known_args()
 
     if not args.task_image_name or not args.task_image_name.strip():
-        raise ValueError(f'Task image name is invalid!')
+        raise ValueError('Task image name is invalid!')
     task_short_name = args.task_image_name.split('/')[-1].split(':')[0]
     logger.info(f"Task image name is {args.task_image_name}, short name is {task_short_name}")
 
-    # mount a temporary directory to pass trajectory from host to container, and to
-    # pass the evaluation result from container to host
-    # 1) trajectory is dumped by OpenHands library (on host machine), but it's needed by
-    # evaluator (in container), so we mount a temporary directory to pass it in
-    # 2) evaluation result is written by evaluator (in container), but we need to persist
-    # it on host machine, so we mount a temporary directory to pass it out
-    if os.getenv('TMPDIR') and os.path.exists(os.getenv('TMPDIR')):
-        temp_dir = os.path.abspath(os.getenv('TMPDIR'))
-    else:
-        temp_dir = tempfile.mkdtemp()
+    # Use a writable outputs directory BOTH for runtime mount and final artifacts.
+    safe_outputs_dir = resolve_writable_outputs_dir(args.outputs_path)
+    
+    # Pre-create browser screenshots directory on host with proper permissions
+    browser_screenshots_dir = os.path.join(safe_outputs_dir, '.browser_screenshots')
+    os.makedirs(browser_screenshots_dir, exist_ok=True, mode=0o777)
+    os.chmod(browser_screenshots_dir, 0o777)  # Ensure writable
+    logger.info(f"Pre-created browser screenshots dir: {browser_screenshots_dir}")
+    
+    # Pre-create screenshots directory on host with proper permissions
+    screenshots_dir = os.path.join(safe_outputs_dir, 'screenshots')
+    os.makedirs(screenshots_dir, exist_ok=True, mode=0o777)
+    os.chmod(screenshots_dir, 0o777)  # Ensure writable
+    logger.info(f"Pre-created screenshots dir: {screenshots_dir}")
 
-    # If --build-image-only True, then build an OpenHands runtime image on top of
-    # TheAgentCompany task image, and then exit. This is useful when we don't want
-    # to build OpenHands runtime images on the fly, which is very time-consuming.
-    # Note: OpenHands requires every single task to have their own runtime image.
+    # If --build-image-only True, build the runtime image and exit.
     if args.build_image_only:
         logger.info("build-image-only mode, will build a runtime image and then exit")
-        config: OpenHandsConfig = get_config(args.task_image_name, task_short_name, temp_dir, LLMConfig())
+        config: OpenHandsConfig = get_config(args.task_image_name, task_short_name, safe_outputs_dir, LLMConfig())
         runtime: Runtime = create_runtime(config)
         call_async_from_sync(runtime.connect)
-        logger.info(f"Finished building runtime image {runtime.runtime_container_image} from base task image {runtime.base_container_image}")
+        logger.info(f"Finished building runtime image {runtime.runtime_container_image} "
+                    f"from base task image {runtime.base_container_image}")
         sys.exit()
 
     agent_llm_config: LLMConfig | None = None
     if args.agent_llm_config:
         agent_llm_config = get_llm_config_arg(args.agent_llm_config)
-
     if agent_llm_config is None:
         raise ValueError(f'Could not find LLM config for agent: --agent-llm-config {args.agent_llm_config}')
-
     if agent_llm_config.api_key is None:
-        raise ValueError(f'LLM API key is not set for agent')
+        raise ValueError('LLM API key is not set for agent')
 
     env_llm_config: LLMConfig | None = None
     if args.env_llm_config:
         env_llm_config = get_llm_config_arg(args.env_llm_config)
-
     if env_llm_config is None:
         raise ValueError(f'Could not find LLM config for evaluation environment: --env-llm-config {args.env_llm_config}')
-
     if env_llm_config.api_key is None:
-        raise ValueError(f'LLM API key is not set for evaluation environment')
+        raise ValueError('LLM API key is not set for evaluation environment')
 
-    config: OpenHandsConfig = get_config(args.task_image_name, task_short_name, temp_dir, agent_llm_config)
+    config: OpenHandsConfig = get_config(args.task_image_name, task_short_name, safe_outputs_dir, agent_llm_config)
     runtime: Runtime = create_runtime(config)
     call_async_from_sync(runtime.connect)
 
-    init_task_env(runtime, args.server_hostname, env_llm_config)
+    # Skip init.sh if RC already reachable
+    if not rc_ready(runtime):
+        init_task_env(runtime, args.server_hostname, env_llm_config)
+    else:
+        logger.info("Rocket.Chat already ready; skipping init.sh")
+
+    # Ensure domain alias exists (we browse 3002 directly in browsing.py)
+    ensure_rc_alias_and_forward(runtime)
+    verify_rc_alias_and_forward(runtime)
 
     dependencies = load_dependencies(runtime)
     logger.info(f"Service dependencies: {dependencies}")
 
     try:
-        pre_login(runtime, dependencies, save_screenshots=True, screenshots_dir=os.path.join(os.path.abspath(args.outputs_path), "screenshots"))
+        pre_login(runtime, dependencies, save_screenshots=True,
+                  screenshots_dir=os.path.join(safe_outputs_dir, "screenshots"))
     except Exception as e:
         logger.error(f"Failed to pre-login: {e}")
-
-        # before giving up, let's try to init and login again
         init_task_env(runtime, args.server_hostname, env_llm_config)
-        pre_login(runtime, dependencies, save_screenshots=True, screenshots_dir=os.path.join(os.path.abspath(args.outputs_path), "screenshots"))
+        pre_login(runtime, dependencies, save_screenshots=True,
+                  screenshots_dir=os.path.join(safe_outputs_dir, "screenshots"))
 
     state = run_solver(runtime, task_short_name, config, dependencies,
-                       save_final_state=True, state_dir=os.path.abspath(args.outputs_path),
-                       save_screenshots=True, screenshots_dir=os.path.join(os.path.abspath(args.outputs_path), "screenshots"))
+                       save_final_state=True, state_dir=safe_outputs_dir,
+                       save_screenshots=True, screenshots_dir=os.path.join(safe_outputs_dir, "screenshots"))
 
-    # this path is the absolute path in the runtime container
+    # Container path (mounted to safe_outputs_dir on host)
     trajectory_path = f'/outputs/traj_{task_short_name}.json'
     result_path = f'/outputs/eval_{task_short_name}.json'
 
     run_evaluator(runtime, env_llm_config, trajectory_path, result_path)
 
-    # finally, move trajectory file and evaluation result from mount path on host (temp dir) to outputs path
-    shutil.move(os.path.join(temp_dir, f'traj_{task_short_name}.json'), os.path.join(os.path.abspath(args.outputs_path), f'traj_{task_short_name}.json'))
-    shutil.move(os.path.join(temp_dir, f'eval_{task_short_name}.json'), os.path.join(os.path.abspath(args.outputs_path), f'eval_{task_short_name}.json'))
+    # Files already live under safe_outputs_dir via the mount. No move needed.
