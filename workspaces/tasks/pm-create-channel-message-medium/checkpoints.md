@@ -5,7 +5,7 @@ This task has 6 points in total.
 
 ## Checkpoint 1 (1pt)
 
-Created the public #literaturereview channel (http://the-agent-company.com:3000/channel/literaturereview)
+Created the public #literaturereview channel (http://the-agent-company.com:3002/channel/literaturereview)
 
 ## Checkpoint 2 (1pt)
 
@@ -17,7 +17,7 @@ Sent message 'Welcome to the literature review channel!'
 
 ## Checkpoint 4 (1pt)
 
-Created the public #benchmarking channel (http://the-agent-company.com:3000/channel/benchmarking)
+Created the public #benchmarking channel (http://the-agent-company.com:3002/channel/benchmarking)
 
 ## Checkpoint 5 (1pt)
 

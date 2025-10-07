@@ -25,27 +25,29 @@ class Selector:
     """
     value: str
     is_anchor: bool = False
-    
+
     def __str__(self) -> str:
         return f"{self.value}"
+
 
 @dataclass
 class BrowserAction:
     """Base class for all browser actions"""
     action_type: ActionType
-    
+
     def to_instruction(self) -> str:
         """Convert the action to a browser instruction string"""
         raise NotImplementedError
 
+
 @dataclass
 class GotoAction(BrowserAction):
     url: str
-    
+
     def __init__(self, url: str):
         super().__init__(ActionType.GOTO)
         self.url = url
-    
+
     def to_instruction(self) -> str:
         return f'goto("{self.url}")'
 
@@ -53,11 +55,11 @@ class GotoAction(BrowserAction):
 @dataclass
 class NoopAction(BrowserAction):
     milliseconds: int
-    
+
     def __init__(self, milliseconds: int):
         super().__init__(ActionType.NOOP)
         self.milliseconds = milliseconds
-    
+
     def to_instruction(self) -> str:
         return f'noop({self.milliseconds})'
 
@@ -66,44 +68,48 @@ class NoopAction(BrowserAction):
 class InputAction(BrowserAction):
     selector: Selector
     value: str
-    
+
     def __init__(self, selector: Union[str, Selector], value: str):
         super().__init__(ActionType.FILL)
-        self.selector = selector if isinstance(selector, Selector) else Selector(selector)
+        self.selector = selector if isinstance(
+            selector, Selector) else Selector(selector)
         self.value = value
-    
+
     def to_instruction(self) -> str:
         return f'fill("{self.selector}", "{self.value}")'
+
 
 @dataclass
 class ClickAction(BrowserAction):
     selector: Selector
-    
+
     def __init__(self, selector: Union[str, Selector]):
         super().__init__(ActionType.CLICK)
-        self.selector = selector if isinstance(selector, Selector) else Selector(selector)
-    
+        self.selector = selector if isinstance(
+            selector, Selector) else Selector(selector)
+
     def to_instruction(self) -> str:
         return f'click("{self.selector}")'
+
 
 def parse_content_to_elements(content: str) -> Dict[str, str]:
     """Parse the observation content into a dictionary mapping anchors to their descriptions"""
     elements = {}
     current_anchor = None
     description_lines = []
-    
+
     for line in content.split('\n'):
         line = line.strip()
         if not line:
             continue
-            
+
         # Check for anchor line
         anchor_match = re.match(r'\[(\d+)\](.*)', line)
         if anchor_match:
             # Save previous element if it exists
             if current_anchor and description_lines:
                 elements[current_anchor] = ' '.join(description_lines)
-            
+
             # Start new element
             current_anchor = anchor_match.group(1)
             description_lines = [anchor_match.group(2).strip()]
@@ -111,26 +117,28 @@ def parse_content_to_elements(content: str) -> Dict[str, str]:
             # Add to current description if we have an anchor
             if current_anchor:
                 description_lines.append(line)
-    
+
     # Save last element
     if current_anchor and description_lines:
         elements[current_anchor] = ' '.join(description_lines)
-        
+
     return elements
+
 
 def find_matching_anchor(content: str, selector: str) -> Optional[str]:
     """Find the anchor ID that matches the given selector description"""
     elements = parse_content_to_elements(content)
-    
+
     # Clean up selector and create a pattern
     selector = selector.lower().strip()
-    
+
     for anchor, description in elements.items():
         description = description.lower().strip()
         if selector in description:
             return anchor
 
     return None
+
 
 def resolve_action(action: BrowserAction, content: str) -> BrowserAction:
     """
@@ -176,7 +184,7 @@ def pre_login(runtime: Runtime, services: List[str], save_screenshots=True, scre
     ]
 
     rocketchat_login_actions = [
-        GotoAction("http://the-agent-company.com:3000"),
+        GotoAction("http://the-agent-company.com:3002"),
         NoopAction(1000),
         InputAction(
             "textbox '', clickable, focused",
@@ -233,10 +241,11 @@ def pre_login(runtime: Runtime, services: List[str], save_screenshots=True, scre
         ('gitlab', gitlab_login_actions),
         ('plane', plane_login_actions),
     ]
-    
+
     for (website_name, login_actions) in all_login_actions:
         if website_name not in services:
-            logger.info(f"Skipping login for {website_name} because it's not in the list of services to reset")
+            logger.info(
+                f"Skipping login for {website_name} because it's not in the list of services to reset")
             continue
 
         if save_screenshots:
@@ -252,11 +261,12 @@ def pre_login(runtime: Runtime, services: List[str], save_screenshots=True, scre
 
             if not action:
                 logger.error(f"FAILED TO RESOLVE ACTION, {action}")
-                raise Exception(f"FAILED TO RESOLVE ACTION, maybe the service is not available")
+                raise Exception(
+                    f"FAILED TO RESOLVE ACTION, maybe the service is not available")
 
             # Convert the action to an instruction string
             instruction = action.to_instruction()
-            
+
             browser_action = BrowseInteractiveAction(
                 browser_actions=instruction
             )

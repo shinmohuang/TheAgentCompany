@@ -49,7 +49,7 @@ to the file. If you are hosting the services on your local machine, use
 * API_KEY:`plane_api_83f868352c6f490aba59b869ffdae1cf`
 
 ## RocketChat
-* service url: http://the-agent-company.com:3000
+* service url: http://the-agent-company.com:3002
 * email: `theagentcompany`
 * password: `theagentcompany`
 

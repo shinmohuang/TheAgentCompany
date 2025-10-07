@@ -1,3 +1,4 @@
+from common import create_rocketchat_client, grader
 import os
 import logging
 
@@ -11,7 +12,7 @@ from scoring import Result, Checkpoint, bonus_for_completing_final
 SERVER_HOSTNAME = os.getenv('SERVER_HOSTNAME') or 'the-agent-company.com'
 
 
-ROCKETCHAT_PORT = os.getenv('ROCKETCHAT_PORT') or '3000'
+ROCKETCHAT_PORT = os.getenv('ROCKETCHAT_PORT') or '3002'
 
 ROCKETCHAT_URL = f"http://{SERVER_HOSTNAME}:{ROCKETCHAT_PORT}"
 
@@ -19,16 +20,17 @@ GITLAB_PORT = os.getenv('GITLAB_PORT') or '8929'
 GITLAB_USER = "root"
 GITLAB_URL = f"http://{SERVER_HOSTNAME}:{GITLAB_PORT}/{GITLAB_USER}"
 
-from common import create_rocketchat_client, grader
 
 # Create RocketChat instance
 rocket = create_rocketchat_client()
 
 ############################# Helper Functions #####################################
 
+
 @grader
 def check_trajectory(trajectory):
     return f"{GITLAB_URL}/bustub/-/issues/759" in trajectory
+
 
 def get_database_members(channel_name=["project-graphdb", "project-streamdb"]):
 
@@ -41,12 +43,14 @@ def get_database_members(channel_name=["project-graphdb", "project-streamdb"]):
 
     return members
 
+
 @grader
 def check_project_distributed():
     members = get_database_members()
 
     for member in members:
-        msgs = rocket.im_history(room_id=member['_id']).json().get('messages', [])
+        msgs = rocket.im_history(
+            room_id=member['_id']).json().get('messages', [])
         msg_log = ""
         for msg in msgs[::-1]:
             print(f"{member['username']}'s chat: {msg['msg']}")
@@ -64,5 +68,3 @@ def grade_checkpoints(trajectory=""):
     checkpoints.append(Checkpoint(1, int(check_trajectory(trajectory))))
     checkpoints.append(Checkpoint(1, int(check_project_distributed())))
     return result
-
-

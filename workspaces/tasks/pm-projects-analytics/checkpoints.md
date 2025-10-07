@@ -22,4 +22,4 @@ Partial credit can be awarded if only some metrics were collected.
 
 ## Checkpoint 3 (1pts)
 
-Verify that the agent posted the summary in the #kudos channel on Rocket.Chat at http://the-agent-company.com:3000/home.
+Verify that the agent posted the summary in the #kudos channel on Rocket.Chat at http://the-agent-company.com:3002/home.

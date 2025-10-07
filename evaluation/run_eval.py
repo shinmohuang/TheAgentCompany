@@ -38,7 +38,8 @@ def get_config(
         run_as_openhands=False,
         max_budget_per_task=4,
         max_iterations=100,
-        save_trajectory_path=os.path.join(mount_path_on_host, f'traj_{task_short_name}.json'),
+        save_trajectory_path=os.path.join(
+            mount_path_on_host, f'traj_{task_short_name}.json'),
         sandbox=SandboxConfig(
             base_container_image=base_container_image,
             enable_auto_lint=True,
@@ -84,8 +85,13 @@ def load_dependencies(runtime: Runtime) -> List[str]:
 
 
 def init_task_env(runtime: Runtime, hostname: str, env_llm_config: LLMConfig):
+    # Set the correct ports for services
+    # RocketChat runs on port 3002 (not the default 3000)
+    rocketchat_port = os.environ.get('ROCKETCHAT_PORT', '3002')
+
     command = (
         f"SERVER_HOSTNAME={hostname} "
+        f"ROCKETCHAT_PORT={rocketchat_port} "
         f"LITELLM_API_KEY={env_llm_config.api_key.get_secret_value() if env_llm_config.api_key else None} "
         f"LITELLM_BASE_URL={env_llm_config.base_url} "
         f"LITELLM_MODEL={env_llm_config.model} "
@@ -162,7 +168,12 @@ def run_solver(runtime: Runtime, task_name: str, config: OpenHandsConfig, depend
 
 
 def run_evaluator(runtime: Runtime, env_llm_config: LLMConfig, trajectory_path: str, result_path: str):
+    # Set the correct ports for services
+    # RocketChat runs on port 3002 (not the default 3000)
+    rocketchat_port = os.environ.get('ROCKETCHAT_PORT', '3002')
+
     command = (
+        f"ROCKETCHAT_PORT={rocketchat_port} "
         f"LITELLM_API_KEY={env_llm_config.api_key.get_secret_value() if env_llm_config.api_key else None} "
         f"LITELLM_BASE_URL={env_llm_config.base_url} "
         f"LITELLM_MODEL={env_llm_config.model} "
@@ -221,7 +232,8 @@ if __name__ == '__main__':
     if not args.task_image_name or not args.task_image_name.strip():
         raise ValueError(f'Task image name is invalid!')
     task_short_name = args.task_image_name.split('/')[-1].split(':')[0]
-    logger.info(f"Task image name is {args.task_image_name}, short name is {task_short_name}")
+    logger.info(
+        f"Task image name is {args.task_image_name}, short name is {task_short_name}")
 
     # mount a temporary directory to pass trajectory from host to container, and to
     # pass the evaluation result from container to host
@@ -234,16 +246,23 @@ if __name__ == '__main__':
     else:
         temp_dir = tempfile.mkdtemp()
 
+    # Set directory permissions to ensure container can write to it
+    # This is necessary because the container may run as a different user
+    os.chmod(temp_dir, 0o777)
+
     # If --build-image-only True, then build an OpenHands runtime image on top of
     # TheAgentCompany task image, and then exit. This is useful when we don't want
     # to build OpenHands runtime images on the fly, which is very time-consuming.
     # Note: OpenHands requires every single task to have their own runtime image.
     if args.build_image_only:
-        logger.info("build-image-only mode, will build a runtime image and then exit")
-        config: OpenHandsConfig = get_config(args.task_image_name, task_short_name, temp_dir, LLMConfig())
+        logger.info(
+            "build-image-only mode, will build a runtime image and then exit")
+        config: OpenHandsConfig = get_config(
+            args.task_image_name, task_short_name, temp_dir, LLMConfig())
         runtime: Runtime = create_runtime(config)
         call_async_from_sync(runtime.connect)
-        logger.info(f"Finished building runtime image {runtime.runtime_container_image} from base task image {runtime.base_container_image}")
+        logger.info(
+            f"Finished building runtime image {runtime.runtime_container_image} from base task image {runtime.base_container_image}")
         sys.exit()
 
     agent_llm_config: LLMConfig | None = None
@@ -251,7 +270,8 @@ if __name__ == '__main__':
         agent_llm_config = get_llm_config_arg(args.agent_llm_config)
 
     if agent_llm_config is None:
-        raise ValueError(f'Could not find LLM config for agent: --agent-llm-config {args.agent_llm_config}')
+        raise ValueError(
+            f'Could not find LLM config for agent: --agent-llm-config {args.agent_llm_config}')
 
     if agent_llm_config.api_key is None:
         raise ValueError(f'LLM API key is not set for agent')
@@ -261,12 +281,14 @@ if __name__ == '__main__':
         env_llm_config = get_llm_config_arg(args.env_llm_config)
 
     if env_llm_config is None:
-        raise ValueError(f'Could not find LLM config for evaluation environment: --env-llm-config {args.env_llm_config}')
+        raise ValueError(
+            f'Could not find LLM config for evaluation environment: --env-llm-config {args.env_llm_config}')
 
     if env_llm_config.api_key is None:
         raise ValueError(f'LLM API key is not set for evaluation environment')
 
-    config: OpenHandsConfig = get_config(args.task_image_name, task_short_name, temp_dir, agent_llm_config)
+    config: OpenHandsConfig = get_config(
+        args.task_image_name, task_short_name, temp_dir, agent_llm_config)
     runtime: Runtime = create_runtime(config)
     call_async_from_sync(runtime.connect)
 
@@ -275,14 +297,23 @@ if __name__ == '__main__':
     dependencies = load_dependencies(runtime)
     logger.info(f"Service dependencies: {dependencies}")
 
-    try:
-        pre_login(runtime, dependencies, save_screenshots=True, screenshots_dir=os.path.join(os.path.abspath(args.outputs_path), "screenshots"))
-    except Exception as e:
-        logger.error(f"Failed to pre-login: {e}")
+    # Check if we should skip pre-login (useful when browser login fails but services are running)
+    skip_pre_login = os.environ.get('SKIP_PRE_LOGIN', '0') == '1'
 
-        # before giving up, let's try to init and login again
-        init_task_env(runtime, args.server_hostname, env_llm_config)
-        pre_login(runtime, dependencies, save_screenshots=True, screenshots_dir=os.path.join(os.path.abspath(args.outputs_path), "screenshots"))
+    if skip_pre_login:
+        logger.warning(
+            "⚠️  Skipping pre-login due to SKIP_PRE_LOGIN environment variable")
+    else:
+        try:
+            pre_login(runtime, dependencies, save_screenshots=True, screenshots_dir=os.path.join(
+                os.path.abspath(args.outputs_path), "screenshots"))
+        except Exception as e:
+            logger.error(f"Failed to pre-login: {e}")
+
+            # before giving up, let's try to init and login again
+            init_task_env(runtime, args.server_hostname, env_llm_config)
+            pre_login(runtime, dependencies, save_screenshots=True, screenshots_dir=os.path.join(
+                os.path.abspath(args.outputs_path), "screenshots"))
 
     state = run_solver(runtime, task_short_name, config, dependencies,
                        save_final_state=True, state_dir=os.path.abspath(args.outputs_path),
@@ -295,5 +326,7 @@ if __name__ == '__main__':
     run_evaluator(runtime, env_llm_config, trajectory_path, result_path)
 
     # finally, move trajectory file and evaluation result from mount path on host (temp dir) to outputs path
-    shutil.move(os.path.join(temp_dir, f'traj_{task_short_name}.json'), os.path.join(os.path.abspath(args.outputs_path), f'traj_{task_short_name}.json'))
-    shutil.move(os.path.join(temp_dir, f'eval_{task_short_name}.json'), os.path.join(os.path.abspath(args.outputs_path), f'eval_{task_short_name}.json'))
+    shutil.move(os.path.join(temp_dir, f'traj_{task_short_name}.json'), os.path.join(
+        os.path.abspath(args.outputs_path), f'traj_{task_short_name}.json'))
+    shutil.move(os.path.join(temp_dir, f'eval_{task_short_name}.json'), os.path.join(
+        os.path.abspath(args.outputs_path), f'eval_{task_short_name}.json'))

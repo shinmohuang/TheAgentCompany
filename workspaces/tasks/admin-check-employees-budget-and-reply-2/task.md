@@ -2,7 +2,7 @@
    - Huang Jie
    - Sophia Rodriguez
    - Mike Chen
-   at http://the-agent-company.com:3000/home
+   at http://the-agent-company.com:3002/home
 
 2. Retrieve equipment prices from owncloud(http://the-agent-company.com:8092) with file path: /Documents/Administrative Specialist/products.pdf
    

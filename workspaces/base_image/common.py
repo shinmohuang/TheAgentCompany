@@ -45,13 +45,13 @@ def grader(func):
             logging.error(f"Error in {func.__name__}: {str(e)}")
             return False
     return wrapper
-    
+
 
 # messages: a list of message.
 # example [{ "content": "Hello, how are you?","role": "user"}]
 def llm_complete(messages):
     if TEST_MODE:
-        return {'choices': [{'message': {"content": "Hello, how are you?","role": "user"}}]}
+        return {'choices': [{'message': {"content": "Hello, how are you?", "role": "user"}}]}
 
     return litellm.completion(
         api_key=LITELLM_API_KEY,
@@ -63,11 +63,11 @@ def llm_complete(messages):
 
 def create_rocketchat_client(username='theagentcompany', password='theagentcompany'):
     SERVER_HOSTNAME = os.getenv('SERVER_HOSTNAME') or 'the-agent-company.com'
-    ROCKETCHAT_PORT = os.getenv('ROCKETCHAT_PORT') or '3000'
-    
+    ROCKETCHAT_PORT = os.getenv('ROCKETCHAT_PORT') or '3002'
+
     # Construct RocketChat URL
     ROCKETCHAT_URL = f"http://{SERVER_HOSTNAME}:{ROCKETCHAT_PORT}"
-    
+
     try:
         return RocketChat(username, password, server_url=ROCKETCHAT_URL)
     except:
@@ -109,6 +109,7 @@ def get_rocketchat_personal_chat_history(rocket_client, username: str, content_o
     logging.info(f'Chat history with {username} is: {history}')
     return history
 
+
 def num_rocketchat_users_contacted(rocket_client, users):
     """
     returns the number of users contacted in the users list
@@ -128,6 +129,7 @@ def num_rocketchat_users_contacted(rocket_client, users):
             msgs = rocket_client.im_history(room_id=id).json()['messages']
             contacted_users += msgs is not None and len(msgs) > 0
     return contacted_users
+
 
 def get_rocketchat_channel_history(rocket_client, channel):
     """
@@ -166,12 +168,14 @@ def get_rocketchat_channel_history(rocket_client, channel):
 
     return messages
 
+
 def get_rocketchat_channel_room_id(rocket_client, channel_name):
     """Get the room_id for a specific channel."""
     response = rocket_client.channels_info(channel=channel_name).json()
     if response.get('success'):
         return response['channel']['_id']
     return None
+
 
 def check_rocketchat_message_posted(rocket_client, channel_name, keywords):
     """
@@ -187,8 +191,9 @@ def check_rocketchat_message_posted(rocket_client, channel_name, keywords):
     room_id = get_rocketchat_channel_room_id(rocket_client, channel_name)
     if not room_id:
         return False
-    
-    messages = rocket_client.channels_history(room_id=room_id, count=10).json().get('messages', [])
+
+    messages = rocket_client.channels_history(
+        room_id=room_id, count=10).json().get('messages', [])
     for message in messages:
         message_text = message.get("msg", "").lower()
         # Check if all keywords are present in the message text
@@ -196,20 +201,24 @@ def check_rocketchat_message_posted(rocket_client, channel_name, keywords):
             return True
     return False
 
+
 def download_image_from_url(image_url, output_file_path):
     try:
         response = requests.get(image_url)
         if response.status_code == 200:
             with open(output_file_path, "wb") as file:
                 file.write(response.content)
-            logging.info(f"Image downloaded from {image_url} to {output_file_path}")
+            logging.info(
+                f"Image downloaded from {image_url} to {output_file_path}")
             return output_file_path
         else:
-            logging.error(f"Failed to download image from {image_url}: {response}")
+            logging.error(
+                f"Failed to download image from {image_url}: {response}")
             return None
     except Exception as e:
         logging.error(f"Failed to download image from {image_url}: {e}")
         return None
+
 
 def evaluate_with_llm(content: str, predicate: str, additional_prompt: str = '', image_path: str = None, image_type: str = IMAGE_JPEG):
     """
@@ -258,10 +267,12 @@ def evaluate_with_llm(content: str, predicate: str, additional_prompt: str = '',
 
         # Call LLM for evaluation
         llm_response = llm_complete(llm_messages)
-        logging.info("LLM evaluation completed", extra={"response": llm_response})
+        logging.info("LLM evaluation completed",
+                     extra={"response": llm_response})
 
         # Extract and process response
-        content = llm_response["choices"][0]["message"]["content"].lower().strip()
+        content = llm_response["choices"][0]["message"]["content"].lower(
+        ).strip()
 
         # Evaluate result
         result = "yes" in content
@@ -302,36 +313,42 @@ def evaluate_chat_history_with_llm(rocket_client, username: str, predicate: str)
     """
     try:
         # Retrieve chat history
-        messages = get_rocketchat_personal_chat_history(rocket_client, username)
+        messages = get_rocketchat_personal_chat_history(
+            rocket_client, username)
         if not messages:
             logging.warning(f"No chat history found for user: {username}")
             return False
-        
+
         return evaluate_with_llm(str(messages), predicate)
 
     except Exception as e:
-        logging.error(f"Failed to evaluate chat history for user {username}: {str(e)}", exc_info=True)
+        logging.error(
+            f"Failed to evaluate chat history for user {username}: {str(e)}", exc_info=True)
         return False
+
 
 def make_gitlab_request(project_identifier: str = None, additional_path: str = None, method: str = 'GET', params: dict = None):
     url = f"{GITLAB_BASEURL}/api/v4"
 
     if project_identifier:
         if '/' in project_identifier:
-            project_identifier = urllib.parse.quote(project_identifier, safe='')
+            project_identifier = urllib.parse.quote(
+                project_identifier, safe='')
         url = f"{url}/projects/{project_identifier}"
-    
+
     if additional_path:
         url = f"{url}/{additional_path}"
-    
+
     try:
-        response = requests.request(method, url, headers=GITLAB_HEADERS, params=params)
+        response = requests.request(
+            method, url, headers=GITLAB_HEADERS, params=params)
         return response
     except Exception as e:
         logging.error(f"GitLab API request failed: {e}")
         return None
 
-def get_gitlab_project_id(project_name:str):
+
+def get_gitlab_project_id(project_name: str):
     """
     Get project ID for gitlab project
 
@@ -342,20 +359,23 @@ def get_gitlab_project_id(project_name:str):
         str: The ID of the project
 
     """
-    projects = make_gitlab_request(None,"projects")
+    projects = make_gitlab_request(None, "projects")
     if not projects:
         logging.warning(f"No gitlab projects found")
         return None
     else:
         projects = projects.json()
-    target_projects = [project['id'] for project in projects if project['name']==project_name]
+    target_projects = [project['id']
+                       for project in projects if project['name'] == project_name]
     if len(target_projects) == 0:
-        logging.warning(f"No gitlab projects found for project name {project_name}")
+        logging.warning(
+            f"No gitlab projects found for project name {project_name}")
         return None
     else:
         return str(target_projects[0])
 
-def get_gitlab_merge_request_by_title(project_id:str, merge_request_title:str):
+
+def get_gitlab_merge_request_by_title(project_id: str, merge_request_title: str):
     """
     Get merge request by title
 
@@ -366,18 +386,21 @@ def get_gitlab_merge_request_by_title(project_id:str, merge_request_title:str):
     Returns:
         dict: The merge request object
     """
-    merge_requests = make_gitlab_request(project_id,"merge_requests")
+    merge_requests = make_gitlab_request(project_id, "merge_requests")
     if not merge_requests:
         logging.warning(f"No gitlab merge requests found")
         return None
     else:
         merge_requests = merge_requests.json()
-    target_merge_requests = [merge_request for merge_request in merge_requests if merge_request['title'].strip().lower()==merge_request_title.strip().lower()]
+    target_merge_requests = [merge_request for merge_request in merge_requests if merge_request['title'].strip(
+    ).lower() == merge_request_title.strip().lower()]
     if len(target_merge_requests) == 0:
-        logging.warning(f"No gitlab merge requests found for title {merge_request_title}")
+        logging.warning(
+            f"No gitlab merge requests found for title {merge_request_title}")
         return None
     else:
         return target_merge_requests[0]
+
 
 def get_gitlab_file_in_mr(mr: dict, file_path: str) -> str:
     """
@@ -413,6 +436,7 @@ def get_owncloud_url_in_file(filename: str):
         logging.error(f"Error: An I/O error occurred. Details: {e}")
         return False
 
+
 def download_owncloud_content(link: str, output_file_path: str):
     """
     link: Share link generated by ownCloud
@@ -422,7 +446,8 @@ def download_owncloud_content(link: str, output_file_path: str):
         return False
 
     if "download" not in link:
-        command = ["curl", "--output", "/tmp/.tmp_download_link", link.rstrip("\n")]
+        command = ["curl", "--output",
+                   "/tmp/.tmp_download_link", link.rstrip("\n")]
         try:
             subprocess.run(command, capture_output=True, text=True, check=True)
         except Exception as e:
@@ -436,7 +461,7 @@ def download_owncloud_content(link: str, output_file_path: str):
             content = f.read()
             matches = re.findall(pattern, content, re.MULTILINE)
             if matches:
-               download_link = matches[0]
+                download_link = matches[0]
 
         if download_link is None:
             logging.warning(f"Did not find proper download link")
@@ -446,7 +471,8 @@ def download_owncloud_content(link: str, output_file_path: str):
 
     try:
         logging.info(download_link)
-        subprocess.run([f"curl {download_link} --output {output_file_path}"], shell=True)
+        subprocess.run(
+            [f"curl {download_link} --output {output_file_path}"], shell=True)
     except Exception as e:
         logging.warning(f"Download from link: {download_link} not successful")
         return False
@@ -487,15 +513,17 @@ def check_and_download_file(file_name, dir_name, output_file_path):
             for response_element in root.findall(".//{DAV:}response"):
                 href = response_element.find("{DAV:}href").text
                 if file_name in href:
-                    logging.info(f"File '{file_name}' found. Proceeding to download.")
-                    
+                    logging.info(
+                        f"File '{file_name}' found. Proceeding to download.")
+
                     # Construct full file URL
                     file_url = server_url + file_name
 
                     # Download the file
                     download_response = requests.get(
                         file_url,
-                        auth=HTTPBasicAuth(OWNCLOUD_USERNAME, OWNCLOUD_PASSWORD),
+                        auth=HTTPBasicAuth(
+                            OWNCLOUD_USERNAME, OWNCLOUD_PASSWORD),
                         stream=True
                     )
 
@@ -503,23 +531,28 @@ def check_and_download_file(file_name, dir_name, output_file_path):
                         with open(output_file_path, "wb") as file:
                             for chunk in download_response.iter_content(chunk_size=8192):
                                 file.write(chunk)
-                        logging.info(f"File '{file_name}' downloaded successfully to '{output_file_path}'.")
+                        logging.info(
+                            f"File '{file_name}' downloaded successfully to '{output_file_path}'.")
                         return True
                     else:
-                        logging.error(f"Failed to download file '{file_name}'. HTTP Status: {download_response.status_code}")
+                        logging.error(
+                            f"Failed to download file '{file_name}'. HTTP Status: {download_response.status_code}")
                         return False
 
             # File not found in the directory
-            logging.warning(f"File '{file_name}' not found in directory '{dir_name}'.")
+            logging.warning(
+                f"File '{file_name}' not found in directory '{dir_name}'.")
             return False
 
         else:
             # Log unexpected HTTP status codes
-            logging.error(f"Error checking directory. HTTP Status: {response.status_code}, Response: {response.text}")
+            logging.error(
+                f"Error checking directory. HTTP Status: {response.status_code}, Response: {response.text}")
             return False
 
     except requests.RequestException as e:
-        logging.warning(f"Failed to check or download file in ownCloud directory: {e}")
+        logging.warning(
+            f"Failed to check or download file in ownCloud directory: {e}")
         return False
 
 
@@ -535,9 +568,9 @@ def check_file_in_owncloud_directory(file_name, dir_name):
     try:
         response = requests.request(
             method="PROPFIND",
-        url=server_url,
-        headers=headers,
-        auth=HTTPBasicAuth(OWNCLOUD_USERNAME, OWNCLOUD_PASSWORD)
+            url=server_url,
+            headers=headers,
+            auth=HTTPBasicAuth(OWNCLOUD_USERNAME, OWNCLOUD_PASSWORD)
         )
     except requests.RequestException as e:
         logging.warning(f"Failed to check file in owncloud directory: {e}")
@@ -556,23 +589,25 @@ def check_file_in_owncloud_directory(file_name, dir_name):
         logging.error(f"Error: {response.status_code}, {response.text}")
         return None
 
+
 def get_binary_file_content_owncloud(file_name, dir_name):
     server_url = f"{OWNCLOUD_URL}/remote.php/webdav/{dir_name}/{file_name}"
 
     try:
         response = requests.get(
-            server_url, 
-        auth=HTTPBasicAuth(OWNCLOUD_USERNAME, OWNCLOUD_PASSWORD)
+            server_url,
+            auth=HTTPBasicAuth(OWNCLOUD_USERNAME, OWNCLOUD_PASSWORD)
         )
     except requests.RequestException as e:
-        logging.warning(f"Failed to get binary file content from owncloud: {e}")
+        logging.warning(
+            f"Failed to get binary file content from owncloud: {e}")
         return None
 
     if response.status_code == 200:
         return response.content
     else:
         return None
-    
+
 
 # Use the unique file name to check if the repository is cloned correctly.
 PROJECT_FILES = {
@@ -584,19 +619,21 @@ PROJECT_FILES = {
     'bustub': 'CMakeLists.txt'
 }
 
+
 def check_repo_exists(project_name: str):
     try:
         if project_name not in PROJECT_FILES:
             logging.warning(f"Unknown project: {project_name}")
             return False
-            
-        file_path = os.path.join('/workspace', project_name, PROJECT_FILES[project_name])
+
+        file_path = os.path.join(
+            '/workspace', project_name, PROJECT_FILES[project_name])
         return os.path.isfile(file_path)
     except Exception as e:
         logging.warning(f"Error checking file: {e}")
         return False
-    
-    
+
+
 def get_all_plane_projects():
     """Get all projects in plane."""
     url = f"{PLANE_BASEURL}/api/v1/workspaces/{PLANE_WORKSPACE_SLUG}/projects/"
@@ -607,7 +644,7 @@ def get_all_plane_projects():
     except Exception as e:
         logging.warning(f"Get all projects failed: {e}")
         return []
-    
+
 
 def get_plane_project_id(project_name):
     """Get the project_id for a specific project by its name."""
@@ -624,6 +661,7 @@ def get_plane_project_id(project_name):
         logging.warning(f"Get project id failed: {e}")
         return None
 
+
 def get_plane_project_all_issues(project_id):
     """Get the issues for a specific project"""
     url = f"{PLANE_BASEURL}/api/v1/workspaces/{PLANE_WORKSPACE_SLUG}/projects/{project_id}/issues"
@@ -635,6 +673,7 @@ def get_plane_project_all_issues(project_id):
     except Exception as e:
         logging.warning(f"Get issues failed: {e}")
         return []
+
 
 def get_plane_state_id_dict(project_id):
     """Get the relationship between state and id.
@@ -673,12 +712,13 @@ def get_plane_state_id_dict(project_id):
         response.raise_for_status()
         projects = response.json().get('results', [])
         for project in projects:
-            state_map[project['name']]=project['id']
-            id_map[project['id']]=project['name']
+            state_map[project['name']] = project['id']
+            id_map[project['id']] = project['name']
     except Exception as e:
         logging.warning(f"Get project id failed: {e}")
         return {}, {}
     return state_map, id_map
+
 
 def get_plane_issue_details(project_id, issue_name):
     """Get details of a specific issue in a project."""
@@ -694,7 +734,8 @@ def get_plane_issue_details(project_id, issue_name):
     except requests.RequestException as e:
         logging.warning(f"Get issue detail failed: {e}")
         return None
-    
+
+
 def get_plane_cycle_details(project_id, cycle_name):
     """Get details of a specific cycle in a project."""
     url = f"{PLANE_BASEURL}/api/v1/workspaces/{PLANE_WORKSPACE_SLUG}/projects/{project_id}/cycles/"
@@ -710,7 +751,8 @@ def get_plane_cycle_details(project_id, cycle_name):
         logging.warning(f"Get cycle detail failed: {e}")
         return None
 
-def get_plane_issues_by_project_cycle(project_id: str, cycle_id:str):
+
+def get_plane_issues_by_project_cycle(project_id: str, cycle_id: str):
     """
     Get issues for a specific cycle.
 
@@ -730,10 +772,11 @@ def get_plane_issues_by_project_cycle(project_id: str, cycle_id:str):
         logging.error(f"Error: {e}")
     return []
 
+
 def get_plane_state_details(project_id, state_id):
     """
     Get details for a state.
-    
+
     Args:
         project_id: The ID of the project
         state_id: The ID of the state
@@ -769,22 +812,26 @@ def get_plane_state_details(project_id, state_id):
         logging.error(f"Error: {e}")
     return dict()
 
+
 def create_plane_issue(project_id, issue_name):
     """ Create an issue in a project."""
     url = f"{PLANE_BASEURL}/api/v1/workspaces/{PLANE_WORKSPACE_SLUG}/projects/{project_id}/issues/"
     try:
-        response = requests.post(url, headers=PLANE_HEADERS, json={"name": issue_name})
+        response = requests.post(
+            url, headers=PLANE_HEADERS, json={"name": issue_name})
         response.raise_for_status()
         return response.json()
     except requests.RequestException as e:
         logging.warning(f"Create issue failed: {e}")
         return None
-    
+
+
 def add_plane_issue_to_cycle(project_id, cycle_id, issue_id):
     """ Add an issue to a cycle."""
     url = f"{PLANE_BASEURL}/api/v1/workspaces/{PLANE_WORKSPACE_SLUG}/projects/{project_id}/cycles/{cycle_id}/cycle-issues/"
     try:
-        response = requests.post(url, headers=PLANE_HEADERS, json={"issues": [issue_id]})
+        response = requests.post(url, headers=PLANE_HEADERS, json={
+                                 "issues": [issue_id]})
         response.raise_for_status()
         return response.json()
     except requests.RequestException as e:

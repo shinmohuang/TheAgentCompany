@@ -19,22 +19,25 @@ from datetime import datetime
 import os
 from rocketchat_bot import RocketChatBot
 
-server_url = os.getenv('BOT_URL') or 'http://localhost:3000'
-credential_file_path = os.getenv('CREDENTIAL_FILE_PATH') or 'npc_credential.json'
+server_url = os.getenv('BOT_URL') or 'http://localhost:3002'
+credential_file_path = os.getenv(
+    'CREDENTIAL_FILE_PATH') or 'npc_credential.json'
+
 
 def get_credentials(user_key):
     # Attempt to get the user's credentials based on the provided key
     with open(credential_file_path, 'r') as file:
         json_data = json.load(file)
-    
+
     user_info = json_data.get(user_key)
-    
+
     if user_info:
         username = user_info.get('username')
         password = user_info.get('password')
         return username, password
     else:
-        raise RuntimeError(f"Didn't find the NPC credential:{user_key} in file")
+        raise RuntimeError(
+            f"Didn't find the NPC credential:{user_key} in file")
         return None, None  # Return None if the key doesn't exist
 
 
@@ -83,7 +86,8 @@ class RocketChatAgent(BaseAgent[Observation, AgentAction]):
         # super().__init__(agent_name=agent_name, uuid_str=uuid_str)
         self.session_id = session_id or str(uuid4())
         self.sender_id = str(uuid4())
-        print(f"step 1: connect to the server: user first name: {credential_name}")
+        print(
+            f"step 1: connect to the server: user first name: {credential_name}")
         username, password = get_credentials(credential_name)
         print(username, password)
         self.bot = RocketChatBot(username, password, server_url)
@@ -113,14 +117,14 @@ class RocketChatAgent(BaseAgent[Observation, AgentAction]):
         login_info = self.bot.api.me().json()
         if 'error' in login_info:
             raise RuntimeError(f"Login failed: {login_info['error']}")
-        
+
         print(f"Login successful! User info: {login_info}")
         print("RocketChat Agent Listening")
         return
 
-    async def send_message(self,obs: Observation):
+    async def send_message(self, obs: Observation):
         # 1. post observation to the message list
-        print("step 2: post observation to the message list:",obs.last_turn)
+        print("step 2: post observation to the message list:", obs.last_turn)
         last_timestamp = datetime.now()
         if obs.last_turn:
             # get rid of x said
@@ -132,15 +136,15 @@ class RocketChatAgent(BaseAgent[Observation, AgentAction]):
         else:
             print("Sotopia NPC decide to reply Empty String. Chenge to not send.")
         return last_timestamp
-    
-    async def get_action_from_message(self,last_timestamp):
+
+    async def get_action_from_message(self, last_timestamp):
         # Get meesage from client
         # if not success:
         #     self.reset("Someone has left or the conversation is too long.")
         #     return AgentAction(action_type="leave", argument="")
         return self.constrct_speak_action(self.bot.run())
 
-    def constrct_speak_action(self,message):
+    def constrct_speak_action(self, message):
         action_string = message
         action_data = {
             "action_type": "speak",

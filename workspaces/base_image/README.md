@@ -105,7 +105,7 @@ ENV OPENAI_API_KEY <Your OPENAI_API_KEY>
 # Redis service URL: the-agent-company.com/:6379
 ENV REDIS_OM_URL redis://default:theagentcompany@the-agent-company.com/:6379
 # RocketChat service URL
-ENV BOT_URL http://the-agent-company.com:3000
+ENV BOT_URL http://the-agent-company.com:3002
 
 # Step2: Change the scenarios.json to use your own definition
 COPY scenarios.json /npc

@@ -52,7 +52,7 @@ ENV SCENARIOS_FILE_PATH /npc/scenarios.json
 
 ################## rocketchat NPC sotopia SETUP ######################
 ENV REDIS_OM_URL redis://default:theagentcompany@the-agent-company.com/:6379
-ENV BOT_URL http://the-agent-company.com:3000
+ENV BOT_URL http://the-agent-company.com:3002
 #############################################################
 
 ################## LLM Evaluator/rocketchat NPC SETUP ###############

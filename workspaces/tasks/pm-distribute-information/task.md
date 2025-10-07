@@ -4,4 +4,4 @@ Navigate to http://the-agent-company.com:8929/root/bustub/-/issues/759. There is
 message directly in the group chat; instead, send private message to each of the members.
 * You do this by sending the link to the project to them
 
-You could find the RocketChat website at http://the-agent-company.com:3000/
+You could find the RocketChat website at http://the-agent-company.com:3002/

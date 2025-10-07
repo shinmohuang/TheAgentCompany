@@ -5,7 +5,7 @@ SLEEP_INTERVAL=2
 
 check_rocketchat() {
     # Using curl to check if RocketChat is accessible
-    curl -s -o /dev/null -w "%{http_code}" "localhost:3000/api/info"
+    curl -s -o /dev/null -w "%{http_code}" "localhost:3002/api/info"
 }
 
 

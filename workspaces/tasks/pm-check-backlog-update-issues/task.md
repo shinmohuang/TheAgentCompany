@@ -6,7 +6,7 @@ Once you're in, scan through all the issues. We're particularly interested in an
      - The Issue Title
      - Who it's assigned to (the Assignee)
 
-Now, head over to our team chat on Rocket.Chat at http://the-agent-company.com:3000/home . Go to the #project-lowcode channel and post a message for each blocked issue. It should look something like this:
+Now, head over to our team chat on Rocket.Chat at http://the-agent-company.com:3002/home . Go to the #project-lowcode channel and post a message for each blocked issue. It should look something like this:
 
      @Assignee (if it was assigned to anyone), [Blocking/backlog Issue Title] has the status Backlog/Blocked. Has it been completed yet?"
 

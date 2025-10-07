@@ -7,12 +7,13 @@ from common import create_rocketchat_client, grader
 
 # Rocket.Chat server URL and admin credentials
 SERVER_HOSTNAME = os.getenv('SERVER_HOSTNAME') or 'the-agent-company.com'
-ROCKETCHAT_PORT = os.getenv('ROCKETCHAT_PORT') or '3000'
+ROCKETCHAT_PORT = os.getenv('ROCKETCHAT_PORT') or '3002'
 ROCKETCHAT_URL = f"http://{SERVER_HOSTNAME}:{ROCKETCHAT_PORT}"
 
 
 # Create RocketChat instance
 rocket = create_rocketchat_client()
+
 
 @grader
 def grade_checkpoint1(trajectory):
@@ -26,6 +27,7 @@ def get_channel_room_id(channel_name):
         return response['channel']['_id']
     return None
 
+
 @grader
 def check_user_added(channel_name, username):
     room_id = get_channel_room_id(channel_name)
@@ -35,6 +37,7 @@ def check_user_added(channel_name, username):
     members = rocket.channels_members(channel=channel_name).json()
     users_list = members.get("members", [])
     return any(user['username'] == username for user in users_list)
+
 
 @grader
 def check_message_sent(channel_name, message, username):
@@ -61,11 +64,10 @@ def grade_checkpoints(trajectory=""):
 
     checkpoints.append(Checkpoint(1, int(grade_checkpoint1(trajectory))))
 
-    checkpoints.append(Checkpoint(1, int(check_user_added("finance-talk", "david_wong"))))
+    checkpoints.append(Checkpoint(
+        1, int(check_user_added("finance-talk", "david_wong"))))
 
-    checkpoints.append(Checkpoint(1, int(check_message_sent("finance-talk", "Welcome to the finance-talk channel!", "theagentcompany"))))
+    checkpoints.append(Checkpoint(1, int(check_message_sent(
+        "finance-talk", "Welcome to the finance-talk channel!", "theagentcompany"))))
 
     return result
-
-
-
