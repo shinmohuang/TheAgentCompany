@@ -11,7 +11,7 @@ CHECKPOINT_3_POINTS = 2
 
 rocket = create_rocketchat_client()
 
-ROCKETCHAT_URL = "http://the-agent-company.com:3000/home"
+ROCKETCHAT_URL = "http://the-agent-company.com:3002/home"
 
 USERNAME = "mark_johnson"
 VALID_PASSWORD = "Fl0w3r#Br1ght"

@@ -5,4 +5,4 @@ Then, inform Jessica Lee that you have finished the analysis. Send her the stati
 Average Rows: Average Number of Rows rounded of 2 decimal places
 Average Columns: Average Number of Columns rounded of 2 decimal places
 
-Also, send her a message on http://the-agent-company.com:3000/ saying "Analysis Finished. Script can be found at script_path" Replace script_path with the path of the data anlysis script.
+Also, send her a message on http://the-agent-company.com:3002/ saying "Analysis Finished. Script can be found at script_path" Replace script_path with the path of the data anlysis script.

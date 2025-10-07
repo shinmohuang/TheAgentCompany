@@ -2,7 +2,7 @@
 
 ## Checkpoint 1 (1pt)
 
-Found the correct channel http://the-agent-company.com:3000/channel/general 
+Found the correct channel http://the-agent-company.com:3002/channel/general 
 
 ## Checkpoint 2 (1pt)
 

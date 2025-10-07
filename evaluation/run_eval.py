@@ -196,6 +196,10 @@ def init_task_env(runtime: Runtime, hostname: str, env_llm_config: LLMConfig):
 
     command = (
         f"SERVER_HOSTNAME={hostname} "
+        f"ROCKETCHAT_PORT=3002 "
+        f"GITLAB_PORT=8929 "
+        f"OWNCLOUD_PORT=8092 "
+        f"PLANE_PORT=8091 "
         f"LITELLM_API_KEY={env_llm_config.api_key.get_secret_value() if env_llm_config.api_key else None} "
         f"LITELLM_BASE_URL={env_llm_config.base_url} "
         f"LITELLM_MODEL={env_llm_config.model} "
@@ -239,8 +243,22 @@ def run_solver(runtime: Runtime, task_name: str, config: OpenHandsConfig, depend
                save_screenshots: bool, screenshots_dir: str) -> State:
     instruction = "Complete the task in /instruction/task.md"
 
+    # Provide service credentials and access info
+    service_info = []
     if 'gitlab' in dependencies:
-        instruction += "\n\nGitlab username is 'root' and password is 'theagentcompany'"
+        service_info.append("- GitLab (http://127.0.0.1:8929): username='root', password='theagentcompany'")
+    if 'rocketchat' in dependencies:
+        service_info.append("- RocketChat (http://127.0.0.1:3002): You are already logged in as 'theagentcompany'. If needed, password='theagentcompany'")
+    if 'owncloud' in dependencies:
+        service_info.append("- OwnCloud (http://127.0.0.1:8092): You are already logged in as 'theagentcompany'. If needed, password='theagentcompany'")
+    if 'plane' in dependencies:
+        service_info.append("- Plane (http://127.0.0.1:8091): You are already logged in as 'agent@company.com'. If needed, password='theagentcompany'")
+    
+    if service_info:
+        instruction += "\n\nAvailable services:\n" + "\n".join(service_info)
+    
+    logger.info(f"run_solver called with dependencies: {dependencies}")
+    logger.info(f"Instruction sent to agent:\n{instruction}")
 
     state: State | None = asyncio.run(
         run_controller(
@@ -282,7 +300,13 @@ def run_solver(runtime: Runtime, task_name: str, config: OpenHandsConfig, depend
 
 
 def run_evaluator(runtime: Runtime, env_llm_config: LLMConfig, trajectory_path: str, result_path: str):
+    # Set service endpoints for evaluator to access from container
     command = (
+        f"SERVER_HOSTNAME=127.0.0.1 "
+        f"ROCKETCHAT_PORT=3002 "
+        f"GITLAB_PORT=8929 "
+        f"OWNCLOUD_PORT=8092 "
+        f"PLANE_PORT=8091 "
         f"LITELLM_API_KEY={env_llm_config.api_key.get_secret_value() if env_llm_config.api_key else None} "
         f"LITELLM_BASE_URL={env_llm_config.base_url} "
         f"LITELLM_MODEL={env_llm_config.model} "
@@ -300,18 +324,39 @@ def run_evaluator(runtime: Runtime, env_llm_config: LLMConfig, trajectory_path: 
 def ensure_rc_alias_and_forward(runtime: Runtime):
     """
     1) Map the-agent-company.com to 127.0.0.1 inside runtime.
-    2) Verify /outputs permissions (already set on host before mount).
+    2) Redirect browser screenshots to /tmp to avoid disk quota on /outputs.
+    3) Ensure /outputs permissions in container.
+    4) Fix port references in task.md from 3000 to 3002.
     """
     runtime.run_action(CmdRunAction(command=(
         "sh -lc 'grep -q \"the-agent-company.com\" /etc/hosts || "
         "echo \"127.0.0.1 the-agent-company.com\" | (command -v sudo >/dev/null 2>&1 && sudo tee -a /etc/hosts || tee -a /etc/hosts)'"
     )))
     
-    # Verify /outputs permissions (already set on host)
+    # Fix port references in task.md inside container
     obs = runtime.run_action(CmdRunAction(command=(
-        "sh -lc 'ls -la /outputs/ | head -10'"
+        "sh -lc 'sed -i \"s/:3000/:3002/g\" /instruction/task.md 2>/dev/null || true; "
+        "echo \"Port 3002 references: $(grep -c \":3002\" /instruction/task.md 2>/dev/null || echo 0)\"; "
+        "echo \"Port 3000 references: $(grep -c \":3000\" /instruction/task.md 2>/dev/null || echo 0)\"'"
     )))
-    logger.info(f"/outputs directory listing: {getattr(obs, 'content', '')[:300]}")
+    logger.info(f"Task.md port fix: {getattr(obs, 'content', '')[:100]}")
+    
+    # Redirect browser internal screenshots to /tmp to avoid disk quota
+    obs = runtime.run_action(CmdRunAction(command=(
+        "sh -lc 'rm -rf /outputs/.browser_screenshots 2>/dev/null || true; "
+        "mkdir -p /tmp/.browser_screenshots && chmod 777 /tmp/.browser_screenshots && "
+        "ln -sfn /tmp/.browser_screenshots /outputs/.browser_screenshots; "
+        "df -h /tmp /outputs | head -5'"
+    )))
+    logger.info(f"Browser screenshots redirected to /tmp: {getattr(obs, 'content', '')[:300]}")
+    
+    # Ensure /outputs and subdirs are writable from container
+    obs = runtime.run_action(CmdRunAction(command=(
+        "sh -lc 'chmod -R 777 /outputs 2>/dev/null || true; "
+        "mkdir -p /outputs/traj && chmod 777 /outputs/traj 2>/dev/null || true; "
+        "ls -lad /outputs /outputs/traj /outputs/screenshots 2>/dev/null || true'"
+    )))
+    logger.info(f"Container /outputs permissions: {getattr(obs, 'content', '')[:300]}")
 
 
 def verify_rc_alias_and_forward(runtime: Runtime):
@@ -378,17 +423,8 @@ if __name__ == '__main__':
     # Use a writable outputs directory BOTH for runtime mount and final artifacts.
     safe_outputs_dir = resolve_writable_outputs_dir(args.outputs_path)
     
-    # Pre-create browser screenshots directory on host (best-effort)
-    browser_screenshots_dir = os.path.join(safe_outputs_dir, '.browser_screenshots')
-    try:
-        os.makedirs(browser_screenshots_dir, exist_ok=True, mode=0o777)
-        try:
-            os.chmod(browser_screenshots_dir, 0o777)
-        except (OSError, PermissionError) as e:
-            logger.warning(f"Could not chmod browser screenshots dir: {e}")
-    except (OSError, PermissionError) as e:
-        logger.warning(f"Could not create browser screenshots dir: {e}")
-    logger.info(f"Pre-created browser screenshots dir: {browser_screenshots_dir}")
+    # Browser internal screenshots will use /tmp in container (see ensure_rc_alias_and_forward)
+    logger.info(f"Browser internal screenshots will be stored in container /tmp via symlink")
 
     # Prepare screenshots directory with fallback to temp when not writable
     screenshots_dir = os.path.join(safe_outputs_dir, 'screenshots')
@@ -416,12 +452,19 @@ if __name__ == '__main__':
             logger.error("Temp screenshots dir also not writable; will disable screenshot saving.")
             save_screenshots_flag = False
 
-    # Pre-create trajectory dir under safe_outputs_dir
+    # Pre-create trajectory dir under safe_outputs_dir with aggressive permissions
     traj_dir = os.path.join(safe_outputs_dir, 'traj')
     try:
         os.makedirs(traj_dir, exist_ok=True, mode=0o777)
+        # Recursively set permissions on parent and child
+        for dirpath in [safe_outputs_dir, traj_dir]:
+            try:
+                os.chmod(dirpath, 0o777)
+            except Exception as e:
+                logger.warning(f"Could not chmod {dirpath}: {e}")
     except Exception as e:
         logger.warning(f"Could not pre-create traj dir: {e}")
+    logger.info(f"Pre-created trajectory dir: {traj_dir}")
 
     # If --build-image-only True, build the runtime image and exit.
     if args.build_image_only:
@@ -467,13 +510,16 @@ if __name__ == '__main__':
     logger.info(f"Service dependencies: {dependencies}")
 
     try:
+        logger.info(f"Starting pre_login for services: {dependencies}")
         pre_login(runtime, dependencies, save_screenshots=save_screenshots_flag,
                   screenshots_dir=os.path.join(screenshots_dir))
+        logger.info("pre_login completed successfully")
     except Exception as e:
-        logger.error(f"Failed to pre-login: {e}")
+        logger.error(f"Failed to pre-login: {e}", exc_info=True)
         init_task_env(runtime, args.server_hostname, env_llm_config)
         pre_login(runtime, dependencies, save_screenshots=save_screenshots_flag,
                   screenshots_dir=os.path.join(screenshots_dir))
+        logger.info("pre_login retry completed")
 
     state = run_solver(runtime, task_short_name, config, dependencies,
                        save_final_state=True, state_dir=safe_outputs_dir,

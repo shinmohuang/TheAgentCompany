@@ -9,4 +9,4 @@ Steps:
     - Started Tasks: [Number of Started Tasks]
     - Unassigned Issues: [Number of Unassigned Issues]
     - Pending Issues: [Total number of Pending Issues]
-3. Create Summary using above structure. Share summary with the team on Rocket.Chat. http://the-agent-company.com:3000/home in the #kudos channel.
+3. Create Summary using above structure. Share summary with the team on Rocket.Chat. http://the-agent-company.com:3002/home in the #kudos channel.

@@ -11,7 +11,7 @@ def grade_checkpoint1(trajectory):
 
 @grader
 def grade_checkpoint2(trajectory):
-    return "http://the-agent-company.com:3000/home" in trajectory
+    return "http://the-agent-company.com:3002/home" in trajectory
 
 @grader
 def grade_checkpoint3():

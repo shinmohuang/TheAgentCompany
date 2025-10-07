@@ -12,4 +12,4 @@ Once you are done, please tell Sarah that you have finished, and also include th
 
 You can ask Xinyi to get docs about the effort, competencies, and salary for each potential person involved.
 
-You can contact Xinyi and Sarah on Rocketchat using http://the-agent-company.com:3000/
+You can contact Xinyi and Sarah on Rocketchat using http://the-agent-company.com:3002/

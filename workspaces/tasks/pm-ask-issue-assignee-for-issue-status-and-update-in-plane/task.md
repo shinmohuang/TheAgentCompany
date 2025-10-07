@@ -2,4 +2,4 @@ As a project manager, you need to check the status of the "Evaluate data through
 
 The Plane issues page can be accessed at: http://the-agent-company.com:8091/tac/projects/ea796314-eeec-41aa-816d-58be13909bf2/issues/
 
-The RocketChat website can be accessed at: http://the-agent-company.com:3000/home
+The RocketChat website can be accessed at: http://the-agent-company.com:3002/home

@@ -305,36 +305,46 @@ def pre_login(runtime: Runtime, services: List[str], save_screenshots=True, scre
             image_id = 0
         logged_in = False
         obs: BrowserOutputObservation = None
-        for action_idx, action in enumerate(login_actions):
-            # Resolve any descriptive selectors to anchor IDs
-            if obs:
-                # Rocket.Chat 专项：在每次动作前检查状态
-                if website_name == 'rocketchat':
+        
+        def check_rocketchat_state(obs, website_name):
+            """Helper function to check and handle RocketChat specific states"""
+            if not obs or website_name != 'rocketchat':
+                return obs, False  # (updated_obs, should_skip_remaining)
+            
+            content_text = obs.get_agent_obs_text() if hasattr(obs, 'get_agent_obs_text') else ''
+            content_lc = content_text.lower() if content_text else ''
+            
+            # Handle Site URL warning popup
+            if 'site url is configured' in content_lc and 'do you want to change' in content_lc:
+                logger.info("Detected Site URL warning popup, clicking 'Yes'...")
+                try:
+                    yes_action = ClickAction("button 'Yes', clickable")
+                    yes_action = resolve_action(yes_action, content_text) or yes_action
+                    yes_instr = yes_action.to_instruction()
+                    yes_browser_action = BrowseInteractiveAction(browser_actions=yes_instr)
+                    yes_browser_action.set_hard_timeout(10000)
+                    logger.info(yes_browser_action, extra={'msg_type': 'ACTION'})
+                    obs = runtime.run_action(yes_browser_action)
+                    logger.info("Clicked 'Yes' on Site URL popup successfully")
                     content_text = obs.get_agent_obs_text() if hasattr(obs, 'get_agent_obs_text') else ''
                     content_lc = content_text.lower() if content_text else ''
-
-                    # 2) 若出现 Site URL 弹窗，点击 Yes
-                    if ('site url is configured' in content_lc and 'do you want to change' in content_lc):
-                        try:
-                            yes_action = ClickAction("button 'Yes', clickable")
-                            yes_action = resolve_action(yes_action, content_text) or yes_action
-                            yes_instr = yes_action.to_instruction()
-                            yes_browser_action = BrowseInteractiveAction(browser_actions=yes_instr)
-                            yes_browser_action.set_hard_timeout(10000)
-                            logger.info(yes_browser_action, extra={'msg_type': 'ACTION'})
-                            obs = runtime.run_action(yes_browser_action)
-                            logger.debug(obs, extra={'msg_type': 'OBSERVATION'})
-                            content_text = obs.get_agent_obs_text() if hasattr(obs, 'get_agent_obs_text') else content_text
-                            content_lc = content_text.lower() if content_text else content_lc
-                        except Exception:
-                            logger.warning("Failed to click 'Yes' on Site URL prompt; continue.")
-
-                    # 3) 若已登录（侧边栏/Home 等关键字），则跳过后续输入
-                    if (('omnichannel' in content_lc or 'home' in content_lc) and 'login' not in content_lc):
-                        logger.info("Rocket.Chat appears logged-in; skipping further login steps.")
-                        logged_in = True
-                        break
-
+                except Exception as e:
+                    logger.warning(f"Failed to click 'Yes' on Site URL prompt: {e}")
+            
+            # Check if already logged in
+            if (('omnichannel' in content_lc or 'home' in content_lc) and 'login' not in content_lc):
+                logger.info("Rocket.Chat appears logged-in; skipping further login steps.")
+                return obs, True
+            
+            return obs, False
+        
+        for action_idx, action in enumerate(login_actions):
+            # Check RocketChat state before each action
+            if obs:
+                obs, should_skip = check_rocketchat_state(obs, website_name)
+                if should_skip:
+                    logged_in = True
+                    break
                 action = resolve_action(action, obs.get_agent_obs_text())
 
             if not action:
@@ -351,6 +361,12 @@ def pre_login(runtime: Runtime, services: List[str], save_screenshots=True, scre
             logger.info(browser_action, extra={'msg_type': 'ACTION'})
             obs: BrowserOutputObservation = runtime.run_action(browser_action)
             logger.debug(obs, extra={'msg_type': 'OBSERVATION'})
+            
+            # Check RocketChat state immediately after action execution
+            obs, should_skip = check_rocketchat_state(obs, website_name)
+            if should_skip:
+                logged_in = True
+                break
             if save_screenshots:
                 screenshot_str = getattr(obs, 'screenshot', '')
                 if screenshot_str:
@@ -364,3 +380,9 @@ def pre_login(runtime: Runtime, services: List[str], save_screenshots=True, scre
                     image_id += 1
                 else:
                     logger.warning(f"Failed to decode screenshot for action {action_idx}")
+        
+        # Log successful login completion
+        if logged_in or obs:
+            logger.info(f"✓ Successfully completed login sequence for {website_name}")
+        else:
+            logger.warning(f"⚠ Login sequence for {website_name} completed but status uncertain")

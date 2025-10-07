@@ -7,6 +7,6 @@ years of experience.
 You can find all resumes on owncloud (http://the-agent-company.com:8092/). Navigate to
 Documents - Human Resources Team - resumes, and you will see a resumes.zip file.
 
-Finally, goto RocketChat (http://the-agent-company.com:3000/) and tell
+Finally, goto RocketChat (http://the-agent-company.com:3002/) and tell
 Chen Xinyi if you find any qualified candidates. If you do, tell her the candidates'
 names.

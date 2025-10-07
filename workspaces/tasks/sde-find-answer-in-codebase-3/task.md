@@ -4,4 +4,4 @@ Find the related arrangement file, find out who is the person oncall and get the
 Below are useful links for your reference:
 owncloud: http://the-agent-company.com:8092/
 Gitlab: http://the-agent-company.com:8929
-RocketChat: http://the-agent-company.com:3000
+RocketChat: http://the-agent-company.com:3002

@@ -16,4 +16,4 @@ Also, perform analysis to help understand the spendings.
 
 Next create a line graph showing the change in spending during outings over time and save this as outings_graph.png in the /workspace folder.
 
-Ping HR Chen Xinyi on Rocketchat at https://the-agent-company.com:3000/home with inks of the excel sheet and the word document, as well as a general trend of the total spending over time (increases, decreases, no difference, etc.)
+Ping HR Chen Xinyi on Rocketchat at https://the-agent-company.com:3002/home with inks of the excel sheet and the word document, as well as a general trend of the total spending over time (increases, decreases, no difference, etc.)

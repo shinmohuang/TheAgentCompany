@@ -4,4 +4,4 @@ Test if each of them are ready to merge. If the issue is ready to merge, merge i
 Set up a meeting agenda, and send it into the Janusgraph channel.
 
 You could find the GitLab website at http://the-agent-company.com:8929/
-You could find the RocketChat website at http://the-agent-company.com:3000
+You could find the RocketChat website at http://the-agent-company.com:3002

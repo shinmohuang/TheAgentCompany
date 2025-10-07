@@ -2,7 +2,7 @@
    - Jessica Lee (Marketing)
    - Huang Jie (Product)
    - Chen Xinyi (HR)
-   at http://the-agent-company.com:3000/home
+   at http://the-agent-company.com:3002/home
 
 2. Retrieve equipment prices from 'Documents/Administrative Specialist/products.pdf' on owncloud(http://the-agent-company.com:8092)
 
