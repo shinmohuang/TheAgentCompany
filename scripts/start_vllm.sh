@@ -2,12 +2,12 @@
 
 # vLLM 快速启动脚本
 # 使用方法: bash start_vllm.sh [model_name] [port] [gpu_count] [max_context_length]
-# 例如: bash start_vllm.sh "Qwen/Qwen2.5-7B-Instruct" 8000 1 32768
+# 例如: bash start_vllm.sh "Qwen/Qwen2.5-32B-Instruct" 8000 1 65536
 
 set -e
 
-# 默认参数
-MODEL=${1:-"Qwen/Qwen2.5-72B-Instruct"}
+# 默认参数（适配 3x40GB GPU，使用32B模型单GPU运行）
+MODEL=${1:-"Qwen/Qwen2.5-32B-Instruct"}
 PORT=${2:-8000}
 GPU_COUNT=${3:-1}
 
@@ -54,6 +54,7 @@ fi
 # 提示 tensor parallel 要求
 echo ""
 echo "💡 注意: tensor parallel size 必须能整除模型的注意力头数量"
+echo "   - Qwen3-Next-80B: 64 个头 (使用 1, 2, 4, 8, 16, 32 或 64 个 GPU)"
 echo "   - Qwen2.5-72B: 40 个头 (使用 1, 2, 4, 5, 8, 10, 20 或 40 个 GPU)"
 echo "   - Llama-3.1-70B: 64 个头 (使用 1, 2, 4, 8, 16, 32 或 64 个 GPU)"
 echo "   - 当前使用: $GPU_COUNT 个 GPU"
@@ -70,15 +71,14 @@ echo "🔄 启动 vLLM 服务器..."
 echo "提示: 首次运行会下载模型，可能需要较长时间"
 echo ""
 
-# 默认最大上下文长度
-MAX_MODEL_LEN=${4:-32768}  # 默认 32K，可以通过第4个参数修改
+# 默认最大上下文长度（针对3x40GB GPU优化）
+MAX_MODEL_LEN=${4:-65536}  # 默认 64K，可以通过第4个参数修改
 
-echo "最大上下文长度: $MAX_MODEL_LEN tokens"
+echo "最大上下文长度: $MAX_MODEL_LEN tokens ($(($MAX_MODEL_LEN/1024))K)"
 echo ""
 
-# 启动 vLLM
-python -m vllm.entrypoints.openai.api_server \
-    --model "$MODEL" \
+# 启动 vLLM（使用新的 serve 命令）
+vllm serve "$MODEL" \
     --host 0.0.0.0 \
     --port "$PORT" \
     --trust-remote-code \
@@ -87,12 +87,13 @@ python -m vllm.entrypoints.openai.api_server \
     --gpu-memory-utilization 0.85
 
 # 如果需要后台运行，可以使用:
-# nohup python -m vllm.entrypoints.openai.api_server \
-#     --model "$MODEL" \
+# nohup vllm serve "$MODEL" \
 #     --host 0.0.0.0 \
 #     --port "$PORT" \
 #     --trust-remote-code \
 #     --tensor-parallel-size "$GPU_COUNT" \
+#     --max-model-len "$MAX_MODEL_LEN" \
+#     --gpu-memory-utilization 0.85 \
 #     > vllm.log 2>&1 &
 # 
 # echo "✅ vLLM 已在后台启动"

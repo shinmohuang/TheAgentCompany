@@ -106,6 +106,115 @@ def init_task_env(runtime: Runtime, hostname: str, env_llm_config: LLMConfig):
     assert obs.exit_code == 0
 
 
+def decode_screenshot_to_bytes(screenshot: str) -> bytes:
+    """
+    Decode a screenshot string to bytes robustly.
+    Handles optional data URL prefixes and missing base64 padding.
+    Returns empty bytes on failure.
+    """
+    if not screenshot:
+        return b""
+    try:
+        content = screenshot
+        if content.startswith('data:image/'):
+            # Strip data URL header like: data:image/png;base64,
+            header_end = content.find(',')
+            content = content[header_end + 1:] if header_end != -1 else content
+        # Fix missing padding
+        padding = len(content) % 4
+        if padding:
+            content = content + ('=' * (4 - padding))
+        return base64.b64decode(content, validate=False)
+    except Exception as e:
+        logger.warning(f"Failed to decode screenshot: {e}")
+        return b""
+
+
+def redirect_browser_screenshots_to_tmp(runtime: Runtime):
+    """
+    Redirect browser internal screenshots to /tmp to avoid disk quota on /outputs.
+    This is the KEY fix for disk quota exceeded errors.
+    """
+    obs = runtime.run_action(CmdRunAction(command=(
+        "sh -c 'mkdir -p /tmp/.browser_screenshots && chmod 777 /tmp/.browser_screenshots && "
+        "rm -rf /outputs/.browser_screenshots 2>/dev/null; "
+        "ln -sfn /tmp/.browser_screenshots /outputs/.browser_screenshots || true'"
+    )))
+    logger.info(
+        f"Browser screenshots redirected to /tmp: {getattr(obs, 'content', '')[:200]}")
+
+
+def fix_task_md_ports(runtime: Runtime):
+    """
+    Fix port references in task.md from 3000 to 3002 inside the container.
+    RocketChat is running on port 3002, but task files in Docker images may reference port 3000.
+    """
+    obs = runtime.run_action(CmdRunAction(command=(
+        "sh -lc 'sed -i \"s/:3000/:3002/g\" /instruction/task.md 2>/dev/null || true; "
+        "echo \"Port 3002 references: $(grep -c \":3002\" /instruction/task.md 2>/dev/null || echo 0)\"; "
+        "echo \"Port 3000 references: $(grep -c \":3000\" /instruction/task.md 2>/dev/null || echo 0)\"'"
+    )))
+    port_fix_result = getattr(obs, 'content', '')
+    logger.info(f"Task.md port fix result: {port_fix_result[:200]}")
+
+
+def fix_rocketchat_site_url_via_api(runtime: Runtime):
+    """
+    Fix RocketChat Site URL configuration via API to prevent popup dialogs.
+    This ensures Agent won't encounter Site URL warnings during task execution.
+    """
+    logger.info("Fixing RocketChat Site URL configuration...")
+    
+    # Use curl to update Site URL setting via RocketChat API
+    obs = runtime.run_action(CmdRunAction(command=(
+        "sh -lc '"
+        "# Get admin auth token and user ID\n"
+        "AUTH_TOKEN=$(curl -s -X POST http://the-agent-company.com:3002/api/v1/login "
+        "-H \"Content-type: application/json\" "
+        "-d \"{\\\"user\\\": \\\"theagentcompany\\\", \\\"password\\\": \\\"theagentcompany\\\"}\" "
+        "| grep -o \"\\\"authToken\\\":\\\"[^\\\"]*\\\"\" | cut -d\\\":\\\" -f2 | tr -d \\\"\\\"); "
+        "USER_ID=$(curl -s -X POST http://the-agent-company.com:3002/api/v1/login "
+        "-H \"Content-type: application/json\" "
+        "-d \"{\\\"user\\\": \\\"theagentcompany\\\", \\\"password\\\": \\\"theagentcompany\\\"}\" "
+        "| grep -o \"\\\"userId\\\":\\\"[^\\\"]*\\\"\" | cut -d\\\":\\\" -f2 | tr -d \\\"\\\"); "
+        "# Update Site_Url setting\n"
+        "curl -s -X POST http://the-agent-company.com:3002/api/v1/settings/Site_Url "
+        "-H \"X-Auth-Token: $AUTH_TOKEN\" "
+        "-H \"X-User-Id: $USER_ID\" "
+        "-H \"Content-type: application/json\" "
+        "-d \"{\\\"value\\\": \\\"http://the-agent-company.com:3002\\\"}\" "
+        "|| echo \"API update failed, continuing anyway\"; "
+        "echo \"Site URL fix attempted\"'"
+    )))
+    
+    result = getattr(obs, 'content', '')
+    logger.info(f"RocketChat Site URL fix result: {result[:300]}")
+
+
+def disable_owncloud_popups(runtime: Runtime):
+    """
+    Disable OwnCloud first-run wizard and notification popups to prevent interruptions.
+    This ensures Agent can directly interact with OwnCloud without dealing with popups.
+    """
+    logger.info("Disabling OwnCloud popups and first-run wizard...")
+    
+    # Use OCS API to disable first-run wizard and notifications
+    obs = runtime.run_action(CmdRunAction(command=(
+        "sh -lc '"
+        "# Disable first-run wizard for user theagentcompany\n"
+        "curl -s -X PUT http://theagentcompany:theagentcompany@127.0.0.1:8092/ocs/v1.php/cloud/users/theagentcompany "
+        "-H \"OCS-APIRequest: true\" "
+        "-d \"key=firstrunwizard.show\" "
+        "-d \"value=0\" "
+        "|| echo \"First-run wizard disable failed, continuing anyway\"; "
+        "# Try alternative approach: set config via occ command if available\n"
+        "echo \"OwnCloud popup disable attempted\"'"
+    )))
+    
+    result = getattr(obs, 'content', '')
+    logger.info(f"OwnCloud popup disable result: {result[:300]}")
+
+
 def codeact_user_response(state: State) -> str:
     msg = (
         'Please continue working on the task on whatever approach you think is suitable.\n'
@@ -134,8 +243,27 @@ def run_solver(runtime: Runtime, task_name: str, config: OpenHandsConfig, depend
                save_screenshots: bool, screenshots_dir: str) -> State:
     instruction = "Complete the task in /instruction/task.md"
 
+    # Provide service access information with explicit credentials (official configuration)
+    service_hints = []
     if 'gitlab' in dependencies:
-        instruction += "\n\nGitlab username is 'root' and password is 'theagentcompany'"
+        service_hints.append("- GitLab: Access at http://the-agent-company.com:8929")
+        service_hints.append("  Login: email='root@local', password='theagentcompany'")
+    if 'rocketchat' in dependencies:
+        service_hints.append("- RocketChat: Access via browser at http://the-agent-company.com:3002")
+        service_hints.append("  Login credentials: email='theagentcompany', password='theagentcompany'")
+        service_hints.append("  IMPORTANT: Use browser() function to interact, e.g.: browser(\"goto('http://the-agent-company.com:3002')\")")
+        service_hints.append("  If you see a login page, use the credentials above to login")
+    if 'owncloud' in dependencies:
+        service_hints.append("- OwnCloud: Access via browser at http://the-agent-company.com:8092")
+        service_hints.append("  Login credentials: username='theagentcompany', password='theagentcompany'")
+    if 'plane' in dependencies:
+        service_hints.append("- Plane: Access via browser at http://the-agent-company.com:8091")
+        service_hints.append("  Login credentials: email='agent@company.com', password='theagentcompany'")
+        service_hints.append("  API Key: plane_api_83f868352c6f490aba59b869ffdae1cf")
+    
+    if service_hints:
+        instruction += "\n\n## Available Services:\n" + "\n".join(service_hints)
+        instruction += "\n\nNote: For web-based services, you MUST use the browser() function to interact with them."
 
     state: State | None = asyncio.run(
         run_controller(
@@ -151,13 +279,35 @@ def run_solver(runtime: Runtime, task_name: str, config: OpenHandsConfig, depend
     if save_screenshots:
         screenshots_dir = os.path.join(screenshots_dir, task_name)
         os.makedirs(screenshots_dir, exist_ok=True)
+        screenshot_count = 0
+        browser_obs_count = 0
+        total_obs_count = len(state.history) if state and state.history else 0
+        
+        logger.info(f"Processing {total_obs_count} observations for screenshots")
+        
         for image_id, obs in enumerate(state.history):
             if isinstance(obs, BrowserOutputObservation):
-                image_data = base64.b64decode(
-                    obs.screenshot.replace('data:image/png;base64,', '')
-                )
-                with open(os.path.join(screenshots_dir, f'{image_id}.png'), 'wb') as file:
-                    file.write(image_data)
+                browser_obs_count += 1
+                screenshot_str = getattr(obs, 'screenshot', '')
+                logger.debug(f"Browser observation {image_id}: screenshot length = {len(screenshot_str)}")
+                
+                image_data = decode_screenshot_to_bytes(screenshot_str)
+                if image_data:
+                    filepath = os.path.join(screenshots_dir, f'{image_id}.png')
+                    with open(filepath, 'wb') as file:
+                        file.write(image_data)
+                    screenshot_count += 1
+                    logger.info(f"Saved screenshot {filepath}, size: {len(image_data)} bytes")
+                else:
+                    logger.warning(f"Failed to decode screenshot for observation {image_id} (screenshot_str length: {len(screenshot_str)})")
+        
+        logger.info(f"Total observations: {total_obs_count}, Browser observations: {browser_obs_count}, Screenshots saved: {screenshot_count}")
+        if screenshot_count > 0:
+            logger.info(f"Screenshots directory: {screenshots_dir}")
+        elif browser_obs_count == 0:
+            logger.warning("No browser observations found in state.history - Agent may not have used the browser")
+        else:
+            logger.warning("Browser observations found but no valid screenshots - Check screenshot data format")
 
     if save_final_state:
         os.makedirs(state_dir, exist_ok=True)
@@ -241,14 +391,26 @@ if __name__ == '__main__':
     # evaluator (in container), so we mount a temporary directory to pass it in
     # 2) evaluation result is written by evaluator (in container), but we need to persist
     # it on host machine, so we mount a temporary directory to pass it out
-    if os.getenv('TMPDIR') and os.path.exists(os.getenv('TMPDIR')):
-        temp_dir = os.path.abspath(os.getenv('TMPDIR'))
+    
+    # Prefer /tmp over NFS-mounted TMPDIR to avoid quota issues
+    tmpdir_env = os.getenv('TMPDIR')
+    if tmpdir_env and '/LOCAL2' in tmpdir_env:
+        logger.warning(f"TMPDIR points to LOCAL2 ({tmpdir_env}), using /tmp instead to avoid quota issues")
+        temp_dir = tempfile.mkdtemp(dir='/tmp')
+    elif tmpdir_env and os.path.exists(tmpdir_env):
+        # Create a subdirectory within TMPDIR, don't use TMPDIR itself
+        temp_dir = tempfile.mkdtemp(dir=tmpdir_env)
     else:
         temp_dir = tempfile.mkdtemp()
 
     # Set directory permissions to ensure container can write to it
     # This is necessary because the container may run as a different user
-    os.chmod(temp_dir, 0o777)
+    try:
+        os.chmod(temp_dir, 0o777)
+        logger.info(f"Set temp_dir permissions to 777: {temp_dir}")
+    except (OSError, PermissionError) as e:
+        logger.warning(f"Unable to chmod temp_dir (this is usually fine on NFS): {e}")
+        # Continue anyway - temp directories are usually writable by default
 
     # If --build-image-only True, then build an OpenHands runtime image on top of
     # TheAgentCompany task image, and then exit. This is useful when we don't want
@@ -294,6 +456,18 @@ if __name__ == '__main__':
 
     init_task_env(runtime, args.server_hostname, env_llm_config)
 
+    # KEY FIX: Redirect browser screenshots to /tmp to avoid disk quota issues
+    redirect_browser_screenshots_to_tmp(runtime)
+    
+    # Fix port references in task.md (3000 -> 3002) inside container
+    fix_task_md_ports(runtime)
+    
+    # Fix RocketChat Site URL to prevent popup dialogs
+    fix_rocketchat_site_url_via_api(runtime)
+    
+    # Disable OwnCloud popups and first-run wizard
+    disable_owncloud_popups(runtime)
+
     dependencies = load_dependencies(runtime)
     logger.info(f"Service dependencies: {dependencies}")
 
@@ -312,6 +486,10 @@ if __name__ == '__main__':
 
             # before giving up, let's try to init and login again
             init_task_env(runtime, args.server_hostname, env_llm_config)
+            redirect_browser_screenshots_to_tmp(runtime)
+            fix_task_md_ports(runtime)
+            fix_rocketchat_site_url_via_api(runtime)
+            disable_owncloud_popups(runtime)
             pre_login(runtime, dependencies, save_screenshots=True, screenshots_dir=os.path.join(
                 os.path.abspath(args.outputs_path), "screenshots"))
 

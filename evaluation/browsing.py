@@ -11,6 +11,30 @@ from openhands.events.observation import BrowserOutputObservation
 from openhands.runtime.base import Runtime
 
 
+def _decode_screenshot_to_bytes(screenshot: str) -> bytes:
+    """
+    Decode a screenshot string to bytes robustly.
+    Handles optional data URL prefixes and missing base64 padding.
+    Returns empty bytes on failure.
+    """
+    if not screenshot:
+        return b""
+    try:
+        content = screenshot
+        if content.startswith('data:image/'):
+            # Strip data URL header like: data:image/png;base64,
+            header_end = content.find(',')
+            content = content[header_end + 1:] if header_end != -1 else content
+        # Fix missing padding
+        padding = len(content) % 4
+        if padding:
+            content = content + ('=' * (4 - padding))
+        return base64.b64decode(content, validate=False)
+    except Exception as e:
+        logger.warning(f"Failed to decode screenshot: {e}")
+        return b""
+
+
 class ActionType(Enum):
     GOTO = auto()
     FILL = auto()
@@ -242,6 +266,72 @@ def pre_login(runtime: Runtime, services: List[str], save_screenshots=True, scre
         ('plane', plane_login_actions),
     ]
 
+    def check_and_handle_service_popups(obs: BrowserOutputObservation, website_name: str) -> tuple[BrowserOutputObservation, bool]:
+        """
+        Check and handle service-specific popups (RocketChat, OwnCloud, etc.) and login status.
+        Returns: (updated_obs, should_skip_remaining_actions)
+        """
+        if not obs:
+            return obs, False
+        
+        content_text = obs.get_agent_obs_text() if hasattr(obs, 'get_agent_obs_text') else ''
+        content_lc = content_text.lower() if content_text else ''
+        
+        # === RocketChat specific ===
+        if website_name == 'rocketchat':
+            # Handle Site URL warning popup
+            if 'site url is configured' in content_lc and 'do you want to change' in content_lc:
+                logger.info("🔔 [RocketChat] Detected Site URL warning popup, clicking 'Yes'...")
+                try:
+                    yes_action = ClickAction("button 'Yes', clickable")
+                    yes_action = resolve_action(yes_action, content_text) or yes_action
+                    yes_instr = yes_action.to_instruction()
+                    yes_browser_action = BrowseInteractiveAction(browser_actions=yes_instr)
+                    yes_browser_action.set_hard_timeout(10000)
+                    logger.info(yes_browser_action, extra={'msg_type': 'ACTION'})
+                    obs = runtime.run_action(yes_browser_action)
+                    logger.info("✅ [RocketChat] Clicked 'Yes' on Site URL popup successfully")
+                    content_text = obs.get_agent_obs_text() if hasattr(obs, 'get_agent_obs_text') else ''
+                    content_lc = content_text.lower() if content_text else ''
+                except Exception as e:
+                    logger.warning(f"⚠️ [RocketChat] Failed to click 'Yes' on Site URL prompt: {e}")
+            
+            # Check if already logged in
+            if (('omnichannel' in content_lc or 'home' in content_lc) and 'login' not in content_lc):
+                logger.info("✅ [RocketChat] Appears already logged-in; skipping further login steps.")
+                return obs, True
+        
+        # === OwnCloud specific ===
+        elif website_name == 'owncloud':
+            # Handle various OwnCloud popups/dialogs
+            popup_handled = False
+            
+            # Check for "dismiss" or "close" buttons (common in OwnCloud notifications/wizards)
+            if any(keyword in content_lc for keyword in ['dismiss', 'skip', 'not now', 'later']):
+                logger.info("🔔 [OwnCloud] Detected dialog, attempting to dismiss...")
+                try:
+                    for button_text in ['Dismiss', 'Skip', 'Not now', 'Later', 'Close']:
+                        dismiss_action = ClickAction(f"button '{button_text}', clickable")
+                        resolved = resolve_action(dismiss_action, content_text)
+                        if resolved:
+                            dismiss_instr = resolved.to_instruction()
+                            dismiss_browser_action = BrowseInteractiveAction(browser_actions=dismiss_instr)
+                            dismiss_browser_action.set_hard_timeout(10000)
+                            logger.info(dismiss_browser_action, extra={'msg_type': 'ACTION'})
+                            obs = runtime.run_action(dismiss_browser_action)
+                            logger.info(f"✅ [OwnCloud] Clicked '{button_text}' button successfully")
+                            popup_handled = True
+                            break
+                except Exception as e:
+                    logger.warning(f"⚠️ [OwnCloud] Failed to handle popup: {e}")
+            
+            # Check if already on main page (Files view)
+            if 'files' in content_lc and ('upload' in content_lc or 'new' in content_lc):
+                logger.info("✅ [OwnCloud] Appears already logged-in; skipping further login steps.")
+                return obs, True
+        
+        return obs, False
+
     for (website_name, login_actions) in all_login_actions:
         if website_name not in services:
             logger.info(
@@ -253,10 +343,16 @@ def pre_login(runtime: Runtime, services: List[str], save_screenshots=True, scre
             if not os.path.exists(directory):
                 os.makedirs(directory)
             image_id = 0
+        logged_in = False
         obs: BrowserOutputObservation = None
+        
         for action in login_actions:
-            # Resolve any descriptive selectors to anchor IDs
+            # Check service popup/status before each action
             if obs:
+                obs, should_skip = check_and_handle_service_popups(obs, website_name)
+                if should_skip:
+                    logged_in = True
+                    break
                 action = resolve_action(action, obs.get_agent_obs_text())
 
             if not action:
@@ -274,10 +370,26 @@ def pre_login(runtime: Runtime, services: List[str], save_screenshots=True, scre
             logger.info(browser_action, extra={'msg_type': 'ACTION'})
             obs: BrowserOutputObservation = runtime.run_action(browser_action)
             logger.debug(obs, extra={'msg_type': 'OBSERVATION'})
+            
+            # Check service popup/status immediately after action execution
+            obs, should_skip = check_and_handle_service_popups(obs, website_name)
+            if should_skip:
+                logged_in = True
+                break
             if save_screenshots:
-                image_data = base64.b64decode(
-                    obs.screenshot.replace('data:image/png;base64,', '')
-                )
-                with open(os.path.join(directory, f'{image_id}.png'), 'wb') as file:
-                    file.write(image_data)
+                screenshot_str = getattr(obs, 'screenshot', '')
+                image_data = _decode_screenshot_to_bytes(screenshot_str)
+                if image_data:
+                    filepath = os.path.join(directory, f'{image_id}.png')
+                    with open(filepath, 'wb') as file:
+                        file.write(image_data)
+                    logger.debug(f"Saved screenshot {filepath}, size: {len(image_data)} bytes")
                     image_id += 1
+                else:
+                    logger.warning(f"Failed to decode screenshot for {website_name} action {image_id}")
+        
+        # Log login completion status
+        if logged_in:
+            logger.info(f"✅ Successfully completed login for {website_name} (already logged in)")
+        else:
+            logger.info(f"✅ Completed login sequence for {website_name}")
